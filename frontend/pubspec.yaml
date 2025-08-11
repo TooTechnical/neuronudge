@@ -1,0 +1,36 @@
+name: frontend
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # ✅ Firebase Core + Auth
+  firebase_core: ^2.30.1
+  firebase_auth: ^4.17.4
+
+  # ✅ New Firebase UI Auth & Google OAuth
+  firebase_ui_auth: ^1.10.0
+  firebase_ui_oauth_google: ^1.2.8
+
+  cloud_firestore: ^4.17.5
+
+
+  # ✅ Upgrade http for compatibility
+  http: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+

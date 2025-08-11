@@ -1,0 +1,82 @@
+{
+  "project_info": {
+    "project_number": "759312443189",
+    "project_id": "neuronudge-d1e18",
+    "storage_bucket": "neuronudge-d1e18.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:759312443189:android:1bf4ec905e24dacd51ce7c",
+        "android_client_info": {
+          "package_name": "com.example.frontend"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "759312443189-dh2ps8prek5h0al56sd2b9nn2rqod00g.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAWbQ4HFyAlmrV8zytQg3i-0v57-FyVmwg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "759312443189-dh2ps8prek5h0al56sd2b9nn2rqod00g.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "759312443189-0i5ffjnfkf2r0d42r0qkarosv4soifrj.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.frontend"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:759312443189:android:8569c4cb2b040ff651ce7c",
+        "android_client_info": {
+          "package_name": "com.neuronudge.frontend"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "759312443189-dh2ps8prek5h0al56sd2b9nn2rqod00g.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAWbQ4HFyAlmrV8zytQg3i-0v57-FyVmwg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "759312443189-dh2ps8prek5h0al56sd2b9nn2rqod00g.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "759312443189-0i5ffjnfkf2r0d42r0qkarosv4soifrj.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.frontend"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
