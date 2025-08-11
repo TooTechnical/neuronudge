@@ -14,10 +14,15 @@ on:
           - format_flutter
           - backend_env_setup
           - create_maintenance_branch
+          - patch_apply
       branch:
         description: "Target branch (default: main)"
         required: false
         default: "main"
+      patch_url:
+        description: "RAW URL to a .patch (required for patch_apply)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -48,11 +53,9 @@ jobs:
             cat > .gitignore << 'EOF'
 # macOS
 .DS_Store
-
-# IDE settings
+# IDE
 .idea/
 .vscode/
-
 # Flutter/Dart
 **/build/
 **/.dart_tool/
@@ -60,19 +63,16 @@ jobs:
 **/.flutter-plugins-dependencies
 **/.metadata
 **/pubspec.lock
-
 # Gradle
 **/.gradle/
 **/gradle/
 **/local.properties
-
 # Xcode
 **/DerivedData/
 **/*.xcworkspace/
 **/*.xcuserstate
 **/*.xcuserdatad
 *.xcconfig
-
 # Python (backend)
 __pycache__/
 *.pyc
@@ -82,13 +82,10 @@ __pycache__/
 .env
 venv/
 .venv/
-
 # Node
 node_modules/
-
 # Logs
 *.log
-
 # OS metadata
 Thumbs.db
 EOF
@@ -164,6 +161,22 @@ EOF
 
           elif [[ "$TASK" == "create_maintenance_branch" ]]; then
             git checkout -b maintenance/automation || git checkout maintenance/automation
+
+          elif [[ "$TASK" == "patch_apply" ]]; then
+            PATCH_URL="${{ inputs.patch_url }}"
+            if [[ -z "$PATCH_URL" ]]; then
+              echo "::error::patch_url is required for patch_apply"
+              exit 1
+            fi
+            echo "Downloading patch from: $PATCH_URL"
+            curl -fsSL "$PATCH_URL" -o /tmp/change.patch
+            git apply --whitespace=fix /tmp/change.patch
+            git add -A
+            git commit -m "chore: apply maintainer patch from $PATCH_URL" || { echo "No changes"; exit 0; }
+
+          else
+            echo "::error::Unknown task '$TASK'"
+            exit 1
           fi
 
       - name: Push changes
