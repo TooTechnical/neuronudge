@@ -39,5 +39,39 @@ NeuroNudge is being developed using:
 - Text-to-Speech nudges  
 - Voice input for adding tasks  
 - Advanced analytics dashboard  
-- Subscription tiers with Stripe  
+- Subscription tiers with Stripe
+
+  
+
+##  Roadmap
+- [ ] Complete onboarding and personalization  
+- [ ] Implement dopamine feedback system  
+- [ ] Deploy MVP to app stores  
+- [ ] Expand into premium subscription features  
+
+
+##  About the Project
+This project is an exploration of how **technology, AI, and behavioral design** can come together to improve focus and motivation. It represents ongoing work in **full-stack development (Flutter + Python)**, API design, and mobile deployment.  
+
+
+
+##  About Me
+I am a **Full Stack Developer** with experience in **web and mobile application development**.  
+NeuroNudge is part of my professional portfolio and demonstrates my ability to:  
+- Build mobile applications with Flutter  
+- Develop backend services with Python (FastAPI)  
+- Integrate Firebase for authentication and real-time data storage  
+- Work with subscription systems (Stripe)  
+- Apply software development practices to create real-world solutions  
+
+##  Note to Employers
+I am actively developing NeuroNudge as part of my **portfolio of full-stack projects**.  
+While the app is still in **mid-development**, it demonstrates my ability to:  
+- Build cross-platform mobile applications with **Flutter (Dart)**  
+- Develop backend services and APIs with **Python (FastAPI)**  
+- Work with **Firebase** for authentication and real-time databases  
+- Implement **subscription and payment systems** (Stripe)  
+- Apply software engineering practices to deliver scalable, real-world solutions  
+
+NeuroNudge is more than a coding exercise — it reflects my ability to take an idea from concept to execution, combining **technical skills, creativity, and problem-solving**. I am excited to continue growing as a developer and bring these skills into a professional role.  
 
