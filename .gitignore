@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+
+# Python venv
+venv/
+**/venv/
+
+# Flutter / Dart
+**/build/
+.dart_tool/
+.packages
+flutter_export_environment.sh
