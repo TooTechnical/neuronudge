@@ -1,26 +1,34 @@
-import 'dart:math'; // for random nudge
+// frontend/lib/main.dart
+import 'dart:async';
+import 'dart:math';
+import 'dart:ui' show FontFeature;
+
 import 'package:flutter/material.dart';
+
+// Firebase Auth (Google sign-in)
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_ui_auth/firebase_ui_auth.dart';
 import 'package:firebase_ui_oauth_google/firebase_ui_oauth_google.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 
+// Local storage
+import 'package:hive_flutter/hive_flutter.dart';
+import 'data/local_repo.dart';
+
+// AI + scheduling
 import 'services/ai_service.dart';
 import 'services/scheduler_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await Hive.initFlutter(); // local boxes will be opened per-user after login
   runApp(const NeuroNudgeApp());
 }
 
 class NeuroNudgeApp extends StatelessWidget {
   const NeuroNudgeApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -46,7 +54,6 @@ class AuthGate extends StatelessWidget {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
-
         if (!snap.hasData) {
           return SignInScreen(
             providers: [
@@ -58,19 +65,19 @@ class AuthGate extends StatelessWidget {
         }
 
         final user = snap.data!;
-        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-
-        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: userDoc.snapshots(),
-          builder: (context, profSnap) {
-            if (profSnap.connectionState == ConnectionState.waiting) {
+        return FutureBuilder<LocalRepo>(
+          future: LocalRepo.open(user.uid), // open per-user local boxes
+          builder: (context, repoSnap) {
+            if (!repoSnap.hasData) {
               return const Scaffold(body: Center(child: CircularProgressIndicator()));
             }
-            final data = profSnap.data?.data();
-            if (data == null || (data['onboarded'] != true)) {
-              return OnboardingScreen(userDoc: userDoc, user: user);
-            }
-            return const Shell();
+            final repo = repoSnap.data!;
+            final profile = repo.getProfile();
+            final onboarded = profile['onboarded'] == true;
+
+            return onboarded
+                ? Shell(repo: repo)
+                : OnboardingScreen(repo: repo, user: user);
           },
         );
       },
@@ -80,7 +87,8 @@ class AuthGate extends StatelessWidget {
 
 /// Bottom-tab shell (Tasks / Focus / Profile / Settings)
 class Shell extends StatefulWidget {
-  const Shell({super.key});
+  final LocalRepo repo;
+  const Shell({super.key, required this.repo});
   @override
   State<Shell> createState() => _ShellState();
 }
@@ -90,10 +98,10 @@ class _ShellState extends State<Shell> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      const TasksPage(),
-      const FocusPage(),
-      const ProfilePage(),
-      const SettingsPage(),
+      TasksPage(repo: widget.repo),
+      FocusPage(repo: widget.repo),
+      ProfilePage(repo: widget.repo),
+      SettingsPage(repo: widget.repo),
     ];
     return Scaffold(
       body: pages[index],
@@ -111,10 +119,10 @@ class _ShellState extends State<Shell> {
   }
 }
 
-/// ===== ONBOARDING =====
+/// ===== ONBOARDING (local) =====
 class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({super.key, required this.userDoc, required this.user});
-  final DocumentReference<Map<String, dynamic>> userDoc;
+  const OnboardingScreen({super.key, required this.repo, required this.user});
+  final LocalRepo repo;
   final User user;
 
   @override
@@ -150,7 +158,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final dailyTargetCtrl = TextEditingController(text: '3');
 
   // Workdays selection
-  final days = <int>{1, 2, 3, 4, 5}; // default Mon–Fri
+  final days = <int>{1, 2, 3, 4, 5}; // Mon–Fri
   final dayLabels = const {1:'Mon',2:'Tue',3:'Wed',4:'Thu',5:'Fri',6:'Sat',7:'Sun'};
 
   // Nudge windows
@@ -212,11 +220,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       'weaknesses': weaknesses.toList(),
       'workStart': _fmt(workStart),
       'workEnd': _fmt(workEnd),
-      'workDays': days.toList()..sort(),
+      'workDays': (days.toList()..sort()),
       'allowWindows': {
-        'before': allowBefore,
-        'during': allowDuring,
-        'after': allowAfter,
+        'before': allowBefore, 'during': allowDuring, 'after': allowAfter,
       },
       'dailyTaskTarget': int.tryParse(dailyTargetCtrl.text.trim()) ?? 3,
       'goals': goalCtrl.text.trim(),
@@ -225,21 +231,32 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       'allowSounds': allowSounds,
       'currentStreak': 0,
       'longestStreak': 0,
-      'updatedAt': FieldValue.serverTimestamp(),
-      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': DateTime.now().millisecondsSinceEpoch,
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
+      'email': widget.user.email,
+      'uid': widget.user.uid,
     };
 
     setState(() => _saving = true);
     try {
-      await widget.userDoc.set(profile, SetOptions(merge: true));
-      AIService.submitProfile({'uid': widget.user.uid, 'email': widget.user.email, ...profile});
+      await widget.repo.saveProfile(profile);
+      // notify planner (non-blocking)
+      AIService.submitProfile(profile);
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Saved! Loading your dashboard…')),
       );
+      // Go to shell
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => Shell(repo: widget.repo),
+      ));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Save failed: $e')),
+      );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -488,45 +505,161 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-/// ===== TASKS TAB =====
-class TasksPage extends StatelessWidget {
-  const TasksPage({super.key});
+/// ===== TASKS (local) =====
+class TasksPage extends StatefulWidget {
+  final LocalRepo repo;
+  const TasksPage({super.key, required this.repo});
+  @override
+  State<TasksPage> createState() => _TasksPageState();
+}
+
+class _TasksPageState extends State<TasksPage> {
+  Timer? _nudgeTimer;
+  bool _nudgeOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nudgeTimer = Timer.periodic(const Duration(seconds: 45), (_) => _checkNudges());
+  }
+
+  @override
+  void dispose() {
+    _nudgeTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkNudges() async {
+    if (_nudgeOpen) return;
+    final tasks = widget.repo.allTasks();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    tasks.sort((a, b) => (a['nextNudgeAt'] ?? 1<<62).compareTo(b['nextNudgeAt'] ?? 1<<62));
+    if (tasks.isEmpty) return;
+
+    final due = tasks.firstWhere(
+      (t) => (t['completed'] != true) && (t['nextNudgeAt'] != null) && (t['nextNudgeAt'] <= nowMs),
+      orElse: () => {},
+    );
+    if (due.isEmpty) return;
+
+    _nudgeOpen = true;
+    final id = due['id'] as String;
+    final title = (due['title'] as String?) ?? 'Task';
+    final style = (widget.repo.getProfile()['preferredNudgeStyle'] as String?) ?? 'Coach';
+    final line = _oneLiner(style);
+
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Nudge: $title'),
+        content: Text(line),
+        actions: [
+          TextButton(
+            child: const Text('Snooze 20m'),
+            onPressed: () async {
+              await widget.repo.updateTask(id, {
+                'nextNudgeAt': DateTime.now().add(const Duration(minutes: 20)).millisecondsSinceEpoch
+              });
+              if (mounted) Navigator.pop(context);
+            },
+          ),
+          TextButton(
+            child: const Text('Start 10m'),
+            onPressed: () {
+              Navigator.pop(context);
+              _openSprint(title: title, taskId: id, minutes: 10, steps: (due['steps'] as List?)?.cast<String>() ?? const []);
+            },
+          ),
+          TextButton(
+            child: const Text('Dismiss'),
+            onPressed: () async {
+              await widget.repo.updateTask(id, {
+                'nextNudgeAt': DateTime.now().add(const Duration(minutes: 90)).millisecondsSinceEpoch
+              });
+              if (mounted) Navigator.pop(context);
+            },
+          ),
+        ],
+      ),
+    );
+
+    _nudgeOpen = false;
+  }
+
+  String _oneLiner(String style) {
+    final bank = {
+      'Gentle': [
+        "Two minutes. That’s all.",
+        "Tiny wins → big momentum.",
+        "Start where it’s easiest."
+      ],
+      'Coach': [
+        "You don’t need motivation — you need motion.",
+        "Touch the task. Start the loop.",
+        "Action kills anxiety."
+      ],
+      'DrillSergeant': [
+        "No thinking. Start now.",
+        "Discipline beats doubt.",
+        "120 seconds. Go."
+      ],
+      'Comedian': [
+        "We ball in tiny steps today.",
+        "Do it badly first.",
+        "Just poke the task."
+      ],
+    }[style] ?? const ["Start with 2 minutes. Move now."];
+    return bank[Random().nextInt(bank.length)];
+  }
+
+  void _openSprint({
+    required String title,
+    required String taskId,
+    required int minutes,
+    required List<String> steps,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => FocusSprintSheet(
+        repo: widget.repo,
+        taskId: taskId,
+        taskTitle: title,
+        minutes: minutes,
+        firstStep: steps.isNotEmpty ? steps.first : null,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser!;
-    final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-
-    // Simpler query (avoid composite index for now)
-    final tasksQuery = userDoc.collection('tasks').orderBy('createdAt', descending: false);
-
+    final repo = widget.repo;
     return Scaffold(
       appBar: AppBar(
         title: const Text('NeuroNudge'),
         actions: [
           IconButton(
-            tooltip: 'Debug: add simple task',
-            icon: const Icon(Icons.build_outlined),
-            onPressed: () => _debugAddSimpleTask(context, userDoc),
-          ),
-          IconButton(
-            tooltip: 'Nudge me',
-            icon: const Icon(Icons.campaign_outlined),
-            onPressed: () => _showNudgeNow(context, userDoc),
+            tooltip: 'Quick nudge',
+            icon: const Icon(Icons.bolt),
+            onPressed: () => _showNudgeNow(context, repo),
           ),
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout),
-            onPressed: () => FirebaseAuth.instance.signOut(),
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+              await repo.close();
+            },
           ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
         children: [
-          _GreetingCard(userDoc: userDoc),
+          _GreetingCard(repo: repo),
           const SizedBox(height: 12),
-          _StreakRow(userDoc: userDoc),
+          _StreakRow(repo: repo),
           const SizedBox(height: 16),
 
           Row(
@@ -536,47 +669,27 @@ class TasksPage extends StatelessWidget {
               IconButton(
                 tooltip: 'Add Task',
                 icon: const Icon(Icons.add_circle),
-                onPressed: () => _showAddOrEditTaskDialog(context, userDoc),
+                onPressed: () => _showAddOrEditTaskDialog(context, repo),
               ),
             ],
           ),
 
-          // Typed StreamBuilder + error shown
-          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: tasksQuery.snapshots(),
-            builder: (context, snap) {
-              if (snap.hasError) {
-                return Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    'Error loading tasks: ${snap.error}\nIf it mentions an index, open the link to create it.',
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                );
-              }
-              if (snap.connectionState == ConnectionState.waiting) {
+          ValueListenableBuilder(
+            valueListenable: repo.watchTasks(),
+            builder: (context, _, __) {
+              final tasks = repo.allTasks()
+                ..sort((a, b) => (a['createdAt'] ?? 0).compareTo(b['createdAt'] ?? 0));
+
+              if (tasks.isEmpty) {
                 return const Padding(
                   padding: EdgeInsets.all(24),
-                  child: Center(child: CircularProgressIndicator()),
-                );
-              }
-              if (!snap.hasData || snap.data!.docs.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
-                      Text("No tasks yet — tap  +  to add one.",
-                          style: TextStyle(color: Colors.black54)),
-                    ],
-                  ),
+                  child: Center(child: Text("No tasks yet — tap + to add one.")),
                 );
               }
 
-              final tasks = snap.data!.docs;
               return Column(
-                children: tasks.map((doc) {
-                  final d = doc.data();
+                children: tasks.map((d) {
+                  final id = d['id'] as String;
                   final completed = (d['completed'] ?? false) as bool;
                   final title = (d['title'] ?? 'Untitled Task') as String;
                   final steps = (d['steps'] as List?)?.cast<String>() ?? const <String>[];
@@ -584,53 +697,76 @@ class TasksPage extends StatelessWidget {
                   final tone = (d['aiTone'] ?? 'Coach') as String;
                   final cat = (d['category'] ?? 'Both') as String;
                   final win = (d['preferredWindow'] ?? 'any') as String;
-                  final priorLabel = (d['priority'] ?? 'Medium') as String;
-                  final Timestamp? nextTs = d['nextNudgeAt'] as Timestamp?;
-                  final nextStr = nextTs == null ? '—' : TimeOfDay.fromDateTime(nextTs.toDate()).format(context);
+                  final int? nextMs = d['nextNudgeAt'] as int?;
+                  final nextStr = (nextMs == null)
+                      ? '—'
+                      : TimeOfDay.fromDateTime(DateTime.fromMillisecondsSinceEpoch(nextMs)).format(context);
 
                   return Card(
                     margin: const EdgeInsets.symmetric(vertical: 6),
-                    child: CheckboxListTile(
-                      value: completed,
-                      title: Text(title),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (steps.isNotEmpty) Text(steps.join(" • ")),
-                          Wrap(
-                            spacing: 8,
+                    child: Column(
+                      children: [
+                        CheckboxListTile(
+                          value: completed,
+                          title: Text(title),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (tb > 0) _chip(Icons.timer, '$tb min'),
-                              _chip(Icons.campaign, tone == 'DrillSergeant' ? 'Drill Sergeant' : tone),
-                              _chip(Icons.category, cat),
-                              _chip(Icons.flag, 'Priority: $priorLabel'),
-                              _chip(Icons.access_time, 'Window: ${win[0].toUpperCase()}${win.substring(1)}'),
-                              _chip(Icons.schedule, 'Next: $nextStr'),
+                              if (steps.isNotEmpty) Text(steps.join(" • ")),
+                              Wrap(
+                                spacing: 8,
+                                children: [
+                                  if (tb > 0) _chip(Icons.timer, '$tb min'),
+                                  _chip(Icons.campaign, tone == 'DrillSergeant' ? 'Drill Sergeant' : tone),
+                                  _chip(Icons.category, cat),
+                                  _chip(Icons.access_time, 'Window: ${win[0].toUpperCase()}${win.substring(1)}'),
+                                  _chip(Icons.schedule, 'Next: $nextStr'),
+                                ],
+                              ),
                             ],
                           ),
-                        ],
-                      ),
-                      onChanged: (v) => doc.reference.update({'completed': v}),
-                      secondary: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            tooltip: 'Edit',
-                            icon: const Icon(Icons.edit_outlined),
-                            onPressed: () => _showAddOrEditTaskDialog(
-                              context,
-                              userDoc,
-                              docRef: doc.reference, // typed right
-                              existing: d,
-                            ),
+                          onChanged: (v) => repo.updateTask(id, {'completed': v}),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8, left: 8, right: 8),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton.icon(
+                                icon: const Icon(Icons.play_arrow),
+                                label: const Text('Start'),
+                                onPressed: () => _openSprint(
+                                  title: title,
+                                  taskId: id,
+                                  minutes: max(10, tb), // ensure >=10
+                                  steps: steps,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              TextButton.icon(
+                                icon: const Icon(Icons.snooze),
+                                label: const Text('Snooze 20m'),
+                                onPressed: () => repo.updateTask(
+                                  id,
+                                  {'nextNudgeAt': DateTime.now().add(const Duration(minutes: 20)).millisecondsSinceEpoch},
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              TextButton.icon(
+                                icon: const Icon(Icons.edit_outlined),
+                                label: const Text('Edit'),
+                                onPressed: () => _showAddOrEditTaskDialog(context, repo, taskId: id, existing: d),
+                              ),
+                              const SizedBox(width: 6),
+                              IconButton(
+                                tooltip: 'Delete',
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () => repo.deleteTask(id),
+                              ),
+                            ],
                           ),
-                          IconButton(
-                            tooltip: 'Delete',
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () => doc.reference.delete(),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   );
                 }).toList(),
@@ -639,31 +775,33 @@ class TasksPage extends StatelessWidget {
           ),
         ],
       ),
-      floatingActionButton: null,
     );
   }
 
   Widget _chip(IconData icon, String text) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.deepPurple.withOpacity(.08),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.deepPurple.withOpacity(.2)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 16, color: Colors.deepPurple),
-          const SizedBox(width: 6),
-          Text(text),
-        ]),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: Colors.deepPurple.withOpacity(.08),
+      borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: Colors.deepPurple.withOpacity(.2)),
+    ),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, size: 16, color: Colors.deepPurple),
+      const SizedBox(width: 6),
+      Text(text),
+    ]),
+  );
 }
 
 class _GreetingCard extends StatelessWidget {
-  const _GreetingCard({required this.userDoc});
-  final DocumentReference<Map<String, dynamic>> userDoc;
+  const _GreetingCard({required this.repo});
+  final LocalRepo repo;
 
   @override
   Widget build(BuildContext context) {
+    final profile = repo.getProfile();
+    final name = (profile['name'] as String?) ?? FirebaseAuth.instance.currentUser?.displayName ?? 'Friend';
+    final style = (profile['preferredNudgeStyle'] as String?) ?? 'Coach';
     final nudgesByStyle = {
       'Gentle': const [
         "Tiny steps beat big intentions.",
@@ -686,88 +824,75 @@ class _GreetingCard extends StatelessWidget {
         "You vs. task: round one. Ding ding.",
       ],
     };
+    final list = nudgesByStyle[style] ?? nudgesByStyle['Coach']!;
+    // ✅ pick randomly without mutating const list
+    final nudge = list[Random().nextInt(list.length)];
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: userDoc.snapshots(),
-      builder: (context, snap) {
-        final data = snap.data?.data() ?? {};
-        final name = (data['name'] as String?) ?? FirebaseAuth.instance.currentUser?.displayName ?? 'Friend';
-        final style = (data['preferredNudgeStyle'] as String?) ?? 'Coach';
-        final all = nudgesByStyle[style] ?? nudgesByStyle['Coach']!;
-        final nudge = all[Random().nextInt(all.length)]; // random pick (no shuffle)
-
-        return Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(colors: [Colors.deepPurple.shade400, Colors.deepPurple.shade700]),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          padding: const EdgeInsets.all(16),
-          child: DefaultTextStyle(
-            style: const TextStyle(color: Colors.white),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("Welcome back, $name 👋", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 8),
-                Text(nudge, style: const TextStyle(fontSize: 14)),
-              ],
-            ),
-          ),
-        );
-      },
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [Colors.deepPurple.shade400, Colors.deepPurple.shade700]),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: DefaultTextStyle(
+        style: const TextStyle(color: Colors.white),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Welcome back, $name 👋", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(nudge, style: const TextStyle(fontSize: 14)),
+          ],
+        ),
+      ),
     );
   }
 }
 
 class _StreakRow extends StatelessWidget {
-  const _StreakRow({required this.userDoc});
-  final DocumentReference<Map<String, dynamic>> userDoc;
+  const _StreakRow({required this.repo});
+  final LocalRepo repo;
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: userDoc.snapshots(),
-      builder: (context, snap) {
-        final data = snap.data?.data() ?? {};
-        final current = (data['currentStreak'] ?? 0) as int;
-        final longest = (data['longestStreak'] ?? 0) as int;
-        return Row(
-          children: [
-            _pill(Icons.local_fire_department, 'Current', '$current'),
-            const SizedBox(width: 8),
-            _pill(Icons.emoji_events, 'Longest', '$longest'),
-          ],
-        );
-      },
+    final d = repo.getProfile();
+    final current = (d['currentStreak'] ?? 0).toString();
+    final longest = (d['longestStreak'] ?? 0).toString();
+    return Row(
+      children: [
+        _pill(Icons.local_fire_department, 'Current', current),
+        const SizedBox(width: 8),
+        _pill(Icons.emoji_events, 'Longest', longest),
+      ],
     );
   }
 
   Widget _pill(IconData icon, String label, String value) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.deepPurple.withOpacity(.08),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: Colors.deepPurple.withOpacity(.2)),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: Colors.deepPurple),
-            const SizedBox(width: 6),
-            Text("$label: ", style: const TextStyle(fontWeight: FontWeight.w600)),
-            Text(value),
-          ],
-        ),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: Colors.deepPurple.withOpacity(.08),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: Colors.deepPurple.withOpacity(.2)),
+    ),
+    child: Row(
+      children: [
+        Icon(icon, size: 18, color: Colors.deepPurple),
+        const SizedBox(width: 6),
+        Text("$label: ", style: const TextStyle(fontWeight: FontWeight.w600)),
+        Text(value),
+      ],
+    ),
+  );
 }
 
-/// Add/Edit Task dialog (CRUD) with AI fallback + robust errors
+/// Add/Edit Task dialog (local) with AI planner and robust defaults
 Future<void> _showAddOrEditTaskDialog(
   BuildContext context,
-  DocumentReference<Map<String, dynamic>> userDoc, {
-  DocumentReference<Map<String, dynamic>>? docRef,
+  LocalRepo repo, {
+  String? taskId,
   Map<String, dynamic>? existing,
 }) async {
-  final isEdit = docRef != null && existing != null;
+  final isEdit = taskId != null && existing != null;
   final titleCtrl = TextEditingController(text: isEdit ? (existing['title'] ?? '') : '');
   final descCtrl = TextEditingController(text: isEdit ? (existing['description'] ?? '') : '');
 
@@ -836,16 +961,10 @@ Future<void> _showAddOrEditTaskDialog(
         if (isEdit)
           TextButton(
             onPressed: () async {
-              try {
-                await docRef!.delete();
-                if (context.mounted) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Task deleted')));
-                }
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
-                }
+              await repo.deleteTask(taskId!);
+              if (context.mounted) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Task deleted')));
               }
             },
             child: const Text('Delete'),
@@ -858,14 +977,14 @@ Future<void> _showAddOrEditTaskDialog(
 
             try {
               if (isEdit) {
-                await docRef!.update({
+                await repo.updateTask(taskId!, {
                   'title': title,
                   'description': description,
                   'category': category,
                   'preferredWindow': preferredWindow,
                   'priority': priority,
                   'priorityScore': priorityScore,
-                  'updatedAt': FieldValue.serverTimestamp(),
+                  'updatedAt': DateTime.now().millisecondsSinceEpoch,
                 });
                 if (context.mounted) {
                   Navigator.pop(context);
@@ -874,9 +993,8 @@ Future<void> _showAddOrEditTaskDialog(
                 return;
               }
 
-              // CREATE: plan via AI, with fallback if AI is offline
-              final profSnap = await userDoc.get();
-              final profile = (profSnap.data() ?? {})..removeWhere((k, v) => v == null);
+              // CREATE: plan via AI (with fallback)
+              final profile = repo.getProfile()..removeWhere((k, v) => v == null);
 
               List<String> steps = const <String>[];
               int timeboxMinutes = 25;
@@ -905,7 +1023,7 @@ Future<void> _showAddOrEditTaskDialog(
                 task: {'preferredWindow': preferredWindow},
               );
 
-              await userDoc.collection('tasks').add({
+              await repo.addTask({
                 'title': title,
                 'description': description,
                 'category': category,
@@ -917,8 +1035,8 @@ Future<void> _showAddOrEditTaskDialog(
                 'aiTone': tone,
                 'aiPlanned': true,
                 'completed': false,
-                'createdAt': FieldValue.serverTimestamp(),
-                'nextNudgeAt': Timestamp.fromDate(next),
+                'createdAt': DateTime.now().millisecondsSinceEpoch,
+                'nextNudgeAt': next.millisecondsSinceEpoch,
               });
 
               if (context.mounted) {
@@ -938,13 +1056,8 @@ Future<void> _showAddOrEditTaskDialog(
   );
 }
 
-/// Simple “Nudge me now” prompt based on style
-Future<void> _showNudgeNow(
-  BuildContext context,
-  DocumentReference<Map<String, dynamic>> userDoc,
-) async {
-  final snap = await userDoc.get();
-  final style = (snap.data()?['preferredNudgeStyle'] as String?) ?? 'Coach';
+Future<void> _showNudgeNow(BuildContext context, LocalRepo repo) async {
+  final style = (repo.getProfile()['preferredNudgeStyle'] as String?) ?? 'Coach';
   final lines = {
     'Gentle': [
       "Two minutes. That’s all.",
@@ -980,47 +1093,18 @@ Future<void> _showNudgeNow(
   );
 }
 
-/// Debug: add a simple task without AI to prove writes work
-Future<void> _debugAddSimpleTask(
-  BuildContext context,
-  DocumentReference<Map<String, dynamic>> userDoc,
-) async {
-  try {
-    await userDoc.collection('tasks').add({
-      'title': 'Debug task',
-      'description': 'Created without AI',
-      'category': 'Both',
-      'preferredWindow': 'any',
-      'priority': 'Medium',
-      'priorityScore': 2,
-      'steps': ['Open app', 'Tap a thing', 'Done'],
-      'timeboxMinutes': 10,
-      'aiTone': 'Coach',
-      'aiPlanned': false,
-      'completed': false,
-      'createdAt': FieldValue.serverTimestamp(),
-      'nextNudgeAt': FieldValue.serverTimestamp(),
-    });
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Debug task saved')));
-    }
-  } catch (e) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Debug save failed: $e')));
-    }
-  }
-}
-
-/// ===== FOCUS TAB (placeholder) =====
+/// ===== FOCUS (timer) =====
 class FocusPage extends StatelessWidget {
-  const FocusPage({super.key});
+  final LocalRepo repo;
+  const FocusPage({super.key, required this.repo});
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Focus')),
       body: const Center(
         child: Text(
-          "Focus mode coming soon:\n• Timers\n• One task highlighted\n• Auto-schedule next nudge",
+          "Start sprints from tasks for now.\n(Standalone Focus mode coming soon)",
           textAlign: TextAlign.center,
         ),
       ),
@@ -1028,15 +1112,126 @@ class FocusPage extends StatelessWidget {
   }
 }
 
-/// ===== PROFILE TAB (with Edit) =====
-class ProfilePage extends StatelessWidget {
-  const ProfilePage({super.key});
+class FocusSprintSheet extends StatefulWidget {
+  final LocalRepo repo;
+  final String taskId;
+  final String taskTitle;
+  final int minutes;
+  final String? firstStep;
+
+  const FocusSprintSheet({
+    super.key,
+    required this.repo,
+    required this.taskId,
+    required this.taskTitle,
+    required this.minutes,
+    this.firstStep,
+  });
+
+  @override
+  State<FocusSprintSheet> createState() => _FocusSprintSheetState();
+}
+
+class _FocusSprintSheetState extends State<FocusSprintSheet> {
+  late int _remainingSec;
+  Timer? _timer;
+  bool _running = true;
+  late int _startedMs;
+
+  @override
+  void initState() {
+    super.initState();
+    _remainingSec = widget.minutes * 60;
+    _startedMs = DateTime.now().millisecondsSinceEpoch;
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!_running) return;
+      if (_remainingSec <= 0) {
+        _complete();
+        return;
+      }
+      setState(() => _remainingSec -= 1);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _complete() async {
+    _timer?.cancel();
+
+    final durationMin = widget.minutes;
+    await widget.repo.logSession({
+      'taskId': widget.taskId,
+      'taskTitle': widget.taskTitle,
+      'startedAt': _startedMs,
+      'durationMin': durationMin,
+      'completed': true,
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
+    });
+
+    await widget.repo.updateTask(widget.taskId, {
+      'lastNudgedAt': DateTime.now().millisecondsSinceEpoch,
+      'nextNudgeAt': DateTime.now().add(const Duration(minutes: 90)).millisecondsSinceEpoch,
+    });
+
+    if (!mounted) return;
+    Navigator.pop(context);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nice work — sprint logged!')));
+  }
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser!;
-    final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+    final m = (_remainingSec ~/ 60).toString().padLeft(2, '0');
+    final s = (_remainingSec % 60).toString().padLeft(2, '0');
 
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+        left: 16, right: 16, top: 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(widget.taskTitle, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          if (widget.firstStep != null && widget.firstStep!.isNotEmpty)
+            Text('First step: ${widget.firstStep!}', textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          Text('$m:$s', style: const TextStyle(fontSize: 36, fontFeatures: [FontFeature.tabularFigures()])),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              FilledButton.icon(
+                icon: Icon(_running ? Icons.pause : Icons.play_arrow),
+                label: Text(_running ? 'Pause' : 'Resume'),
+                onPressed: () => setState(() => _running = !_running),
+              ),
+              const SizedBox(width: 12),
+              TextButton.icon(
+                icon: const Icon(Icons.flag),
+                label: const Text('Finish'),
+                onPressed: _complete,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+}
+
+/// ===== PROFILE (local) =====
+class ProfilePage extends StatelessWidget {
+  final LocalRepo repo;
+  const ProfilePage({super.key, required this.repo});
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profile'),
@@ -1044,15 +1239,15 @@ class ProfilePage extends StatelessWidget {
           IconButton(
             tooltip: 'Edit profile',
             icon: const Icon(Icons.edit_outlined),
-            onPressed: () => _showEditProfileSheet(context, userDoc),
+            onPressed: () => _showEditProfileSheet(context, repo),
           ),
         ],
       ),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: userDoc.snapshots(),
-        builder: (context, snap) {
-          final d = snap.data?.data() ?? {};
-          final name = d['name'] as String? ?? user.displayName ?? 'User';
+      body: ValueListenableBuilder(
+        valueListenable: repo.watchProfile(),
+        builder: (context, _, __) {
+          final d = repo.getProfile();
+          final name = d['name'] as String? ?? FirebaseAuth.instance.currentUser?.displayName ?? 'User';
           final pronouns = d['pronouns'] as String? ?? '—';
           final age = (d['age'] as int?)?.toString() ?? '—';
           final role = d['role'] as String? ?? '—';
@@ -1060,7 +1255,7 @@ class ProfilePage extends StatelessWidget {
           final bio = d['bio'] as String? ?? '—';
           final goal = d['goals'] as String? ?? '—';
           final nudge = d['preferredNudgeStyle'] as String? ?? '—';
-          final email = user.email ?? '—';
+          final email = FirebaseAuth.instance.currentUser?.email ?? '—';
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -1082,7 +1277,10 @@ class ProfilePage extends StatelessWidget {
               FilledButton.icon(
                 icon: const Icon(Icons.logout),
                 label: const Text('Sign out'),
-                onPressed: () => FirebaseAuth.instance.signOut(),
+                onPressed: () async {
+                  await FirebaseAuth.instance.signOut();
+                  await repo.close();
+                },
               ),
             ],
           );
@@ -1092,21 +1290,16 @@ class ProfilePage extends StatelessWidget {
   }
 
   Widget _info(String title, String value, IconData icon) => Card(
-        child: ListTile(
-          leading: Icon(icon),
-          title: Text(title),
-          subtitle: Text(value),
-        ),
-      );
+    child: ListTile(
+      leading: Icon(icon),
+      title: Text(title),
+      subtitle: Text(value),
+    ),
+  );
 }
 
-/// Edit Profile (CRUD: Update)
-Future<void> _showEditProfileSheet(
-  BuildContext context,
-  DocumentReference<Map<String, dynamic>> userDoc,
-) async {
-  final snap = await userDoc.get();
-  final d = snap.data() ?? {};
+Future<void> _showEditProfileSheet(BuildContext context, LocalRepo repo) async {
+  final d = repo.getProfile();
 
   final nameCtrl = TextEditingController(text: d['name'] ?? '');
   final bioCtrl = TextEditingController(text: d['bio'] ?? '');
@@ -1195,7 +1388,8 @@ Future<void> _showEditProfileSheet(
             const SizedBox(height: 12),
             FilledButton(
               onPressed: () async {
-                await userDoc.set({
+                await repo.saveProfile({
+                  ...repo.getProfile(),
                   'name': nameCtrl.text.trim().isEmpty ? 'User' : nameCtrl.text.trim(),
                   'pronouns': pronouns,
                   'age': int.tryParse(ageCtrl.text.trim()),
@@ -1203,8 +1397,8 @@ Future<void> _showEditProfileSheet(
                   'neuroType': neuroType,
                   'preferredNudgeStyle': nudgeStyle,
                   'bio': bioCtrl.text.trim(),
-                  'updatedAt': FieldValue.serverTimestamp(),
-                }, SetOptions(merge: true));
+                  'updatedAt': DateTime.now().millisecondsSinceEpoch,
+                });
                 if (ctx.mounted) Navigator.pop(ctx);
               },
               child: const Text('Save changes'),
@@ -1217,9 +1411,10 @@ Future<void> _showEditProfileSheet(
   );
 }
 
-/// ===== SETTINGS TAB =====
+/// ===== SETTINGS (local) =====
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  final LocalRepo repo;
+  const SettingsPage({super.key, required this.repo});
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
@@ -1245,13 +1440,9 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _load() async {
-    final user = FirebaseAuth.instance.currentUser!;
-    final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-    final d = doc.data() ?? {};
-
-    String? _s(String k) => d[k] as String?;
-    String? ws = _s('workStart');
-    String? we = _s('workEnd');
+    final d = widget.repo.getProfile();
+    String? ws = d['workStart'] as String?;
+    String? we = d['workEnd'] as String?;
 
     setState(() {
       workStart = _parse(ws) ?? const TimeOfDay(hour: 9, minute: 0);
@@ -1293,9 +1484,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser!;
-    final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
@@ -1360,7 +1548,8 @@ class _SettingsPageState extends State<SettingsPage> {
             icon: const Icon(Icons.save_outlined),
             label: const Text('Save settings'),
             onPressed: () async {
-              await userDoc.set({
+              await widget.repo.saveProfile({
+                ...widget.repo.getProfile(),
                 'workStart': _fmt(workStart),
                 'workEnd': _fmt(workEnd),
                 'workDays': days.toList()..sort(),
@@ -1371,8 +1560,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 },
                 'dailyTaskTarget': int.tryParse(dailyTargetCtrl.text.trim()) ?? 3,
                 'allowSounds': allowSounds,
-                'updatedAt': FieldValue.serverTimestamp(),
-              }, SetOptions(merge: true));
+                'updatedAt': DateTime.now().millisecondsSinceEpoch,
+              });
 
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Settings saved')));

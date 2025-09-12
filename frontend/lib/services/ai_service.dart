@@ -1,150 +1,70 @@
-// lib/services/ai_service.dart
+// frontend/lib/services/ai_service.dart
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
-/// Set your own backend base URL at build time:
-/// flutter run -d chrome --dart-define=AI_BASE_URL=http://127.0.0.1:8000
-const String _defaultBase =
-    String.fromEnvironment('AI_BASE_URL', defaultValue: 'http://127.0.0.1:8000');
-
-class AIPlan {
+class Plan {
   final List<String> steps;
   final int timeboxMinutes;
-  final String tone; // e.g., 'DrillSergeant', 'Coach', 'Gentle', 'Comedian'
-
-  AIPlan({required this.steps, required this.timeboxMinutes, required this.tone});
-
-  Map<String, dynamic> toJson() => {
-        'steps': steps,
-        'timeboxMinutes': timeboxMinutes,
-        'tone': tone,
-      };
-
-  factory AIPlan.fromJson(Map<String, dynamic> j) => AIPlan(
-        steps: (j['steps'] as List).cast<String>(),
-        timeboxMinutes: (j['timeboxMinutes'] as num).toInt(),
-        tone: (j['tone'] as String),
-      );
+  final String tone;
+  Plan({required this.steps, required this.timeboxMinutes, required this.tone});
 }
 
 class AIService {
-  static String get baseUrl => _defaultBase;
+  static String get baseUrl {
+    // Set by: flutter run ... --dart-define=AI_BASE_URL=http://127.0.0.1:8000
+    const fromDefine = String.fromEnvironment('AI_BASE_URL');
+    if (fromDefine.isNotEmpty) return fromDefine;
+    // Fallback for dev if you forget the define
+    return 'http://127.0.0.1:8000';
+  }
 
-  /// Call your backend to save/update the profile.
-  /// Expected backend: POST /api/profile  (JSON body)
-  static Future<void> submitProfile(Map<String, dynamic> profile) async {
-    final uri = Uri.parse('$baseUrl/api/profile');
+  static Future<void> submitProfile(Map<String, dynamic> payload) async {
+    final uri = Uri.parse('$baseUrl/profile');
+    if (kDebugMode) {
+      final short = jsonEncode(payload);
+      print('[AI] POST $uri payload=${short.substring(0, short.length.clamp(0, 200))}…');
+    }
     try {
-      final res = await http
-          .post(uri,
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode(profile))
-          .timeout(const Duration(seconds: 8));
-      if (res.statusCode >= 200 && res.statusCode < 300) return;
-      // Non-2xx: silently ignore (frontend keeps working)
-    } catch (_) {
-      // No backend yet? Ignore; app runs with local logic.
+      await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      );
+    } catch (e) {
+      if (kDebugMode) print('[AI] /profile error: $e');
     }
   }
 
-  /// Ask your backend to plan a task. If unavailable, fall back to a local heuristic.
-  /// Expected backend: POST /api/plan  (body: { title, description, profile })
-  static Future<AIPlan> planTask({
+  static Future<Plan> planTask({
     required String title,
-    String? description,
+    required String description,
     required Map<String, dynamic> profile,
   }) async {
-    final uri = Uri.parse('$baseUrl/api/plan');
-    final body = {
-      'title': title,
-      'description': description ?? '',
-      'profile': profile,
-    };
+    final uri = Uri.parse('$baseUrl/plan');
+    final bodyMap = {'title': title, 'description': description, 'profile': profile};
+    final body = jsonEncode(bodyMap);
 
-    try {
-      final res = await http
-          .post(uri,
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode(body))
-          .timeout(const Duration(seconds: 8));
-
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        final j = jsonDecode(res.body) as Map<String, dynamic>;
-        return AIPlan.fromJson(j);
-      }
-    } catch (_) {
-      // fall through to heuristic
+    if (kDebugMode) {
+      print('[AI] POST $uri body=${body.substring(0, body.length.clamp(0, 200))}…');
     }
 
-    // ===== Local Heuristic (no backend yet) =====
-    return _heuristicPlan(title: title, description: description, profile: profile);
-  }
+    final resp = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: body,
+    );
 
-  static AIPlan _heuristicPlan({
-    required String title,
-    String? description,
-    required Map<String, dynamic> profile,
-  }) {
-    final text = ('$title ${description ?? ''}').toLowerCase();
-    final neuro = (profile['neuroType'] ?? '').toString().toLowerCase();
-    final preferred = (profile['preferredNudgeStyle'] ?? '').toString();
+    if (kDebugMode) print('[AI] /plan status=${resp.statusCode} resp=${resp.body}');
 
-    // Tone: default by ADHD type or preferred style
-    String tone = 'Coach';
-    if (preferred.isNotEmpty) {
-      tone = preferred.replaceAll(' ', '');
-    } else if (neuro.contains('hyper')) {
-      tone = 'DrillSergeant';
-    } else if (neuro.contains('high') && neuro.contains('adhd')) {
-      tone = 'DrillSergeant';
+    if (resp.statusCode != 200) {
+      throw Exception('AI plan failed ${resp.statusCode}: ${resp.body}');
     }
 
-    // Category guess
-    bool isClean = RegExp(r'\b(clean|tidy|room|space|desk|kitchen|bed(room)?|organize)\b')
-        .hasMatch(text);
-    bool isProject = RegExp(r'\b(project|code|build|write|essay|report|website|deploy|homework)\b')
-        .hasMatch(text);
-    bool isReading =
-        RegExp(r'\b(read|book|chapter|study|revision|revise)\b').hasMatch(text);
-
-    int minutes = 20;
-    List<String> steps = [];
-
-    if (isClean) {
-      minutes = text.contains('personal space') ? 30 : 10;
-      steps = [
-        'Set a timer for $minutes minutes',
-        'Pick ONE zone (desk, floor, or surface)',
-        'Trash & laundry out first',
-        'Group items: keep, bin, move',
-        'Reset the zone and stop when timer ends',
-      ];
-    } else if (isProject) {
-      minutes = 60;
-      steps = [
-        'Open the project and the exact file/doc you need',
-        'Write a 3-line plan for this session',
-        'Do the first subtask for 25 minutes',
-        'Short break (5 minutes), then continue',
-        'Save/commit and write a 1-line summary',
-      ];
-    } else if (isReading) {
-      minutes = 30;
-      steps = [
-        'Choose a chapter/section (~$minutes minutes)',
-        'Read with a pen; underline 3 key ideas',
-        'Write 3 bullet points of takeaways',
-        'Stop when timer ends and log your progress',
-      ];
-    } else {
-      minutes = 15;
-      steps = [
-        'Define the smallest meaningful first step',
-        'Do it for $minutes minutes (no perfection)',
-        'Stop, review, and set the next tiny step',
-      ];
-    }
-
-    return AIPlan(steps: steps, timeboxMinutes: minutes, tone: tone);
+    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final steps = (data['steps'] as List?)?.cast<String>() ?? const <String>[];
+    final tb = (data['timeboxMinutes'] as num?)?.toInt() ?? 25;
+    final tone = (data['tone'] as String?) ?? 'Coach';
+    return Plan(steps: steps, timeboxMinutes: tb, tone: tone);
   }
 }
