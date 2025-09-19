@@ -568,7 +568,13 @@ class _TasksPageState extends State<TasksPage> {
             child: const Text('Start 10m'),
             onPressed: () {
               Navigator.pop(context);
-              _openSprint(title: title, taskId: id, minutes: 10, steps: (due['steps'] as List?)?.cast<String>() ?? const []);
+              _openSprint(
+                title: title,
+                taskId: id,
+                // Use task's minutes if set, otherwise 10 for this quick start
+                minutes: max(5, (due['timeboxMinutes'] as int? ?? 10)),
+                steps: (due['steps'] as List?)?.cast<String>() ?? const [],
+              );
             },
           ),
           TextButton(
@@ -611,6 +617,42 @@ class _TasksPageState extends State<TasksPage> {
       ],
     }[style] ?? const ["Start with 2 minutes. Move now."];
     return bank[Random().nextInt(bank.length)];
+  }
+
+  Future<int?> _pickSprintMinutes(BuildContext context, {required int initial}) async {
+    int temp = initial.clamp(5, 60);
+    return showDialog<int>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Choose sprint length'),
+        content: StatefulBuilder(
+          builder: (context, setState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('$temp minutes', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              Slider(
+                min: 5, max: 60, divisions: 11,
+                value: temp.toDouble(),
+                label: '$temp',
+                onChanged: (v) => setState(() => temp = v.round()),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [5,10,15,20,25,30,45,60].map((m)=>ActionChip(
+                  label: Text('${m}m'),
+                  onPressed: () => setState(()=> temp = m),
+                )).toList(),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, temp), child: const Text('Start')),
+        ],
+      ),
+    );
   }
 
   void _openSprint({
@@ -735,12 +777,19 @@ class _TasksPageState extends State<TasksPage> {
                               TextButton.icon(
                                 icon: const Icon(Icons.play_arrow),
                                 label: const Text('Start'),
-                                onPressed: () => _openSprint(
-                                  title: title,
-                                  taskId: id,
-                                  minutes: max(10, tb), // ensure >=10
-                                  steps: steps,
-                                ),
+                                onPressed: () async {
+                                  final chosen = await _pickSprintMinutes(
+                                    context,
+                                    initial: tb > 0 ? tb : 25,
+                                  );
+                                  if (chosen == null) return;
+                                  _openSprint(
+                                    title: title,
+                                    taskId: id,
+                                    minutes: chosen,
+                                    steps: steps,
+                                  );
+                                },
                               ),
                               const SizedBox(width: 6),
                               TextButton.icon(
@@ -825,7 +874,6 @@ class _GreetingCard extends StatelessWidget {
       ],
     };
     final list = nudgesByStyle[style] ?? nudgesByStyle['Coach']!;
-    // ✅ pick randomly without mutating const list
     final nudge = list[Random().nextInt(list.length)];
 
     return Container(
@@ -900,62 +948,114 @@ Future<void> _showAddOrEditTaskDialog(
   String preferredWindow = isEdit ? (existing['preferredWindow'] ?? 'any') : 'any';
   String priority = isEdit ? (existing['priority'] ?? 'Medium') : 'Medium';
   int priorityScore = {'Low': 1, 'Medium': 2, 'High': 3}[priority]!;
+  final timeboxCtrl = TextEditingController(
+    text: (isEdit
+            ? (existing['timeboxMinutes'] as int? ?? 25)
+            : 25)
+        .toString(),
+  );
 
   await showDialog(
     context: context,
     builder: (context) => AlertDialog(
       title: Text(isEdit ? 'Edit Task' : 'New Task'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: 'Title')),
-          const SizedBox(height: 8),
-          TextField(
-            controller: descCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Describe it (optional)',
-              hintText: 'e.g. Clean bedroom / Finish module / Read chapter 3',
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: 'Title')),
+            const SizedBox(height: 8),
+            TextField(
+              controller: descCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Describe it (optional)',
+                hintText: 'e.g. Clean bedroom / Finish module / Read chapter 3',
+              ),
+              maxLines: 3,
             ),
-            maxLines: 3,
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            value: category,
-            decoration: const InputDecoration(labelText: 'Category'),
-            items: const [
-              DropdownMenuItem(value: 'Work', child: Text('Work')),
-              DropdownMenuItem(value: 'Home', child: Text('Home')),
-              DropdownMenuItem(value: 'Both', child: Text('Both')),
-            ],
-            onChanged: (v) => category = v ?? 'Both',
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            value: preferredWindow,
-            decoration: const InputDecoration(labelText: 'Preferred time window'),
-            items: const [
-              DropdownMenuItem(value: 'any', child: Text('Any')),
-              DropdownMenuItem(value: 'before', child: Text('Before work')),
-              DropdownMenuItem(value: 'during', child: Text('During work')),
-              DropdownMenuItem(value: 'after', child: Text('After work')),
-            ],
-            onChanged: (v) => preferredWindow = v ?? 'any',
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            value: priority,
-            decoration: const InputDecoration(labelText: 'Priority'),
-            items: const [
-              DropdownMenuItem(value: 'High', child: Text('High')),
-              DropdownMenuItem(value: 'Medium', child: Text('Medium')),
-              DropdownMenuItem(value: 'Low', child: Text('Low')),
-            ],
-            onChanged: (v) {
-              priority = v ?? 'Medium';
-              priorityScore = {'Low': 1, 'Medium': 2, 'High': 3}[priority]!;
-            },
-          ),
-        ],
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: category,
+              decoration: const InputDecoration(labelText: 'Category'),
+              items: const [
+                DropdownMenuItem(value: 'Work', child: Text('Work')),
+                DropdownMenuItem(value: 'Home', child: Text('Home')),
+                DropdownMenuItem(value: 'Both', child: Text('Both')),
+              ],
+              onChanged: (v) => category = v ?? 'Both',
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: preferredWindow,
+              decoration: const InputDecoration(labelText: 'Preferred time window'),
+              items: const [
+                DropdownMenuItem(value: 'any', child: Text('Any')),
+                DropdownMenuItem(value: 'before', child: Text('Before work')),
+                DropdownMenuItem(value: 'during', child: Text('During work')),
+                DropdownMenuItem(value: 'after', child: Text('After work')),
+              ],
+              onChanged: (v) => preferredWindow = v ?? 'any',
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: priority,
+              decoration: const InputDecoration(labelText: 'Priority'),
+              items: const [
+                DropdownMenuItem(value: 'High', child: Text('High')),
+                DropdownMenuItem(value: 'Medium', child: Text('Medium')),
+                DropdownMenuItem(value: 'Low', child: Text('Low')),
+              ],
+              onChanged: (v) {
+                priority = v ?? 'Medium';
+                priorityScore = {'Low': 1, 'Medium': 2, 'High': 3}[priority]!;
+              },
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: timeboxCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Sprint minutes (5–60)',
+                helperText: 'Used when you tap Start; you can still pick a different length each time.',
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (!isEdit)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.auto_fix_high),
+                  label: const Text('Auto-plan with AI'),
+                  onPressed: () async {
+                    final title = titleCtrl.text.trim().isEmpty ? 'New Task' : titleCtrl.text.trim();
+                    final description = descCtrl.text.trim();
+                    try {
+                      final plan = await AIService.planTask(
+                        title: title,
+                        description: description,
+                        profile: repo.getProfile()..removeWhere((k, v) => v == null),
+                      );
+                      // fill fields from AI
+                      if (plan.timeboxMinutes > 0) {
+                        timeboxCtrl.text = plan.timeboxMinutes.toString();
+                      }
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('AI plan drafted — you can edit before saving.')),
+                        );
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('AI unavailable: $e')),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ),
+          ],
+        ),
       ),
       actions: [
         if (isEdit)
@@ -974,6 +1074,12 @@ Future<void> _showAddOrEditTaskDialog(
           onPressed: () async {
             final title = titleCtrl.text.trim().isEmpty ? 'New Task' : titleCtrl.text.trim();
             final description = descCtrl.text.trim();
+            final tbParsed = int.tryParse(timeboxCtrl.text.trim());
+            int timeboxMinutes = (tbParsed == null || tbParsed < 5 || tbParsed > 60) ? 25 : tbParsed;
+            List<String> steps = isEdit
+                ? ((existing?['steps'] as List?)?.cast<String>() ?? const <String>[])
+                : const <String>[];
+            String tone = isEdit ? (existing?['aiTone'] as String? ?? 'Coach') : 'Coach';
 
             try {
               if (isEdit) {
@@ -984,6 +1090,7 @@ Future<void> _showAddOrEditTaskDialog(
                   'preferredWindow': preferredWindow,
                   'priority': priority,
                   'priorityScore': priorityScore,
+                  'timeboxMinutes': timeboxMinutes,
                   'updatedAt': DateTime.now().millisecondsSinceEpoch,
                 });
                 if (context.mounted) {
@@ -994,32 +1101,27 @@ Future<void> _showAddOrEditTaskDialog(
               }
 
               // CREATE: plan via AI (with fallback)
-              final profile = repo.getProfile()..removeWhere((k, v) => v == null);
-
-              List<String> steps = const <String>[];
-              int timeboxMinutes = 25;
-              String tone = 'Coach';
-
               try {
                 final plan = await AIService.planTask(
                   title: title,
                   description: description,
-                  profile: profile,
+                  profile: repo.getProfile()..removeWhere((k, v) => v == null),
                 );
                 steps = plan.steps;
-                timeboxMinutes = plan.timeboxMinutes;
+                // If user provided a custom number, keep it; else use AI suggestion
+                if (tbParsed == null) timeboxMinutes = plan.timeboxMinutes;
                 tone = plan.tone;
               } catch (_) {
                 steps = (description.isNotEmpty)
                     ? ['Plan it', 'Start', 'Do next tiny piece']
                     : ['Start for 5 minutes', 'Do second 5 minutes', 'Write a note'];
-                timeboxMinutes = 25;
+                // keep user-entered or default 25
                 tone = 'Coach';
               }
 
               final next = SchedulerService.suggestNextNudge(
                 now: DateTime.now(),
-                profile: profile,
+                profile: repo.getProfile(),
                 task: {'preferredWindow': preferredWindow},
               );
 
@@ -1162,7 +1264,7 @@ class _FocusSprintSheetState extends State<FocusSprintSheet> {
   Future<void> _complete() async {
     _timer?.cancel();
 
-    final durationMin = widget.minutes;
+    final durationMin = (widget.minutes - (_remainingSec ~/ 60)).clamp(0, widget.minutes);
     await widget.repo.logSession({
       'taskId': widget.taskId,
       'taskTitle': widget.taskTitle,
