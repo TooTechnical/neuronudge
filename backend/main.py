@@ -1,142 +1,199 @@
-# backend/main.py
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
 
-from fastapi import FastAPI, Request
+import os
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],          # you can lock down to your domain later
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+APP_VERSION = "0.2.0"
+MAX_TITLE_LENGTH = 160
+MAX_DESCRIPTION_LENGTH = 4000
+
+
+def _allowed_origins() -> list[str]:
+    raw = os.getenv("ALLOWED_ORIGINS", "")
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+app = FastAPI(
+    title="NeuroNudge API",
+    version=APP_VERSION,
+    description="Task-planning API for the NeuroNudge productivity application.",
 )
 
-# Allow Flutter web to call the API locally (relax for dev; tighten for prod)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],        # TODO: lock this down for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+origins = _allowed_origins()
+if origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    )
 
-# ---------- Models ----------
+
+class ProfileContext(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    preferredNudgeStyle: str | None = None
+    biggestBlocker: str | None = None
+    neuroType: str | None = None
+
+
 class PlanRequest(BaseModel):
-    title: str
-    description: Optional[str] = ""
-    profile: Dict[str, Any] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=MAX_TITLE_LENGTH)
+    description: str = Field(default="", max_length=MAX_DESCRIPTION_LENGTH)
+    profile: ProfileContext = Field(default_factory=ProfileContext)
+
+    @field_validator("title", "description")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
 
 class PlanResponse(BaseModel):
-    steps: List[str]
-    timeboxMinutes: int
+    steps: list[str]
+    timeboxMinutes: int = Field(ge=5, le=90)
     tone: str
 
-# ---------- Health ----------
-@app.get("/health")
-def health():
-    return {"ok": True, "ts": datetime.utcnow().isoformat()}
 
-# ---------- Profile (optional “learning” endpoint) ----------
+class ProfileSubmission(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    uid: str = Field(min_length=1, max_length=128)
+
+
+@app.get("/health")
+def health() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "service": "neuronudge-api",
+        "version": APP_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _require_bearer_token(authorization: str | None) -> str:
+    """Require an identity token at the API boundary.
+
+    Firebase Admin verification is deliberately the next implementation step.
+    Until that is wired, production must set REQUIRE_AUTH=false only for a
+    controlled preview environment.
+    """
+    require_auth = os.getenv("REQUIRE_AUTH", "true").lower() not in {"0", "false", "no"}
+    if not require_auth:
+        return "preview"
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+        )
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+        )
+    return token
+
+
 @app.post("/profile")
-def profile(payload: Dict[str, Any], request: Request):
-    # You can persist this later; for now just log it so we know calls arrive
-    print(
-        f"[profile] from {request.client.host} "
-        f"uid={payload.get('uid')} "
-        f"name={payload.get('name') or payload.get('email')}"
-    )
+def submit_profile(
+    payload: ProfileSubmission,
+    authorization: str | None = Header(default=None),
+) -> dict[str, bool]:
+    _require_bearer_token(authorization)
+    # Do not log names, email addresses, diagnoses, biographies, or raw tokens.
+    # Profile persistence will be added behind verified Firebase identity.
     return {"ok": True}
 
-# ---------- Heuristics ----------
-def infer_domain_steps(title: str, description: str) -> List[str]:
+
+def infer_domain_steps(title: str, description: str) -> list[str]:
     text = f"{title} {description}".lower()
 
-    # Cleaning-style tasks
     if any(k in text for k in ["clean", "tidy", "room", "kitchen", "bedroom", "space"]):
         return [
-            "Set a 5-minute timer and bag visible trash",
-            "Make the bed or clear desk surface",
-            "Collect loose items into one basket",
-            "Put away 10 things (count out loud)",
-            "Quick wipe/sweep the highest-impact spots",
+            "Set a five-minute timer and remove visible rubbish",
+            "Clear one high-impact surface",
+            "Collect loose items into one container",
+            "Put away ten items",
+            "Wipe or sweep the most visible area",
         ]
 
-    # Writing/coding/study
     if any(k in text for k in ["essay", "project", "report", "assignment", "module", "code", "write", "deck", "slides"]):
         return [
-            "Open file & write a 3-bullet plan",
-            "Do the first micro-task (≤10 min)",
-            "Commit/save a checkpoint",
-            "Do the second micro-task (≤10 min)",
-            "Write the next-step note at the top",
+            "Open the working file and write a three-bullet plan",
+            "Complete the smallest useful piece",
+            "Save a checkpoint",
+            "Complete the next small piece",
+            "Write down the next action before stopping",
         ]
 
-    # Reading
     if any(k in text for k in ["read", "chapter", "book", "paper", "article"]):
         return [
-            "Pick exact pages/section (e.g., 8–12)",
-            "Read 15 min; mark 🔖 3 ideas",
+            "Choose the exact pages or section",
+            "Read for fifteen minutes and mark three ideas",
             "Write a two-sentence summary",
-            "Create one follow-up question",
+            "Record one follow-up question",
         ]
 
-    # Generic default
     return [
-        "Write the smallest next action in 1 line",
-        "Work 5 minutes to get momentum",
-        "Do a 10-minute push on the core bit",
-        "Wrap: log what moved & next step",
+        "Write the smallest next action in one sentence",
+        "Work on it for five minutes",
+        "Do a ten-minute focused push",
+        "Record what changed and the next action",
     ]
 
-def choose_timebox(profile: Dict[str, Any], text: str) -> int:
-    style = (profile.get("preferredNudgeStyle") or "").lower()
-    blocker = (profile.get("biggestBlocker") or "").lower()
-    neuro = (profile.get("neuroType") or "").lower()
+
+def choose_timebox(profile: ProfileContext, text: str) -> int:
+    style = (profile.preferredNudgeStyle or "").lower()
+    blocker = (profile.biggestBlocker or "").lower()
+    neuro = (profile.neuroType or "").lower()
 
     if "hyperactive" in neuro:
         return 15
     if "starting" in blocker:
-        return 10 if "clean" not in text.lower() else 15
+        return 15 if "clean" in text.lower() else 10
     if "drill" in style:
         return 25
     return 25
 
-def choose_tone(profile: Dict[str, Any]) -> str:
-    tone = profile.get("preferredNudgeStyle")
+
+def choose_tone(profile: ProfileContext) -> str:
+    tone = profile.preferredNudgeStyle
     if tone in {"Gentle", "Coach", "DrillSergeant", "Comedian"}:
         return tone
     return "Coach"
 
-# ---------- Planner ----------
-@app.post("/plan", response_model=PlanResponse)
-def plan(req: PlanRequest, request: Request):
-    print(f"[plan] from {request.client.host} title={req.title!r}")
 
-    # 1) try to split user-provided description into steps
-    steps: List[str] = []
-    desc = (req.description or "").strip()
-    if desc:
+@app.post("/plan", response_model=PlanResponse)
+def plan(
+    request: PlanRequest,
+    authorization: str | None = Header(default=None),
+) -> PlanResponse:
+    _require_bearer_token(authorization)
+
+    steps: list[str] = []
+    if request.description:
         raw = [
-            s.strip(" -•\t\r\n")
-            for s in desc.replace(" then ", "\n").replace(" and ", "\n").splitlines()
+            item.strip(" -•\t\r\n")
+            for item in request.description.replace(" then ", "\n").replace(" and ", "\n").splitlines()
         ]
-        raw = [r for r in raw if r]
+        raw = [item for item in raw if item]
         if 1 <= len(raw) <= 6:
             steps = raw[:5]
 
-    # 2) otherwise, infer steps from task domain
     if not steps:
-        steps = infer_domain_steps(req.title, req.description or "")
+        steps = infer_domain_steps(request.title, request.description)
 
-    # 3) choose timebox & tone from profile/task
-    tb = choose_timebox(req.profile, f"{req.title} {req.description}")
-    tone = choose_tone(req.profile)
+    timebox = choose_timebox(request.profile, f"{request.title} {request.description}")
+    tone = choose_tone(request.profile)
+    steps = steps[:3] if timebox <= 15 else steps[:5]
 
-    # 4) keep it tight: 3 steps for ≤15 min, else up to 5
-    steps = steps[:3] if tb <= 15 else steps[:5]
-
-    return PlanResponse(steps=steps, timeboxMinutes=tb, tone=tone)
+    return PlanResponse(steps=steps, timeboxMinutes=timebox, tone=tone)
