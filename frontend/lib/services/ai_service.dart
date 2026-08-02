@@ -1,5 +1,7 @@
-// frontend/lib/services/ai_service.dart
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
@@ -7,32 +9,61 @@ class Plan {
   final List<String> steps;
   final int timeboxMinutes;
   final String tone;
-  Plan({required this.steps, required this.timeboxMinutes, required this.tone});
+
+  const Plan({
+    required this.steps,
+    required this.timeboxMinutes,
+    required this.tone,
+  });
 }
 
 class AIService {
+  static const Duration _timeout = Duration(seconds: 20);
+
   static String get baseUrl {
-    // Set by: flutter run ... --dart-define=AI_BASE_URL=http://127.0.0.1:8000
-    const fromDefine = String.fromEnvironment('AI_BASE_URL');
-    if (fromDefine.isNotEmpty) return fromDefine;
-    // Fallback for dev if you forget the define
+    const configured = String.fromEnvironment('AI_BASE_URL');
+    if (configured.isNotEmpty) {
+      final uri = Uri.parse(configured);
+      if (kReleaseMode && uri.scheme != 'https') {
+        throw StateError('AI_BASE_URL must use HTTPS in release builds.');
+      }
+      return configured.replaceAll(RegExp(r'/+$'), '');
+    }
+
+    if (kReleaseMode) {
+      throw StateError('AI_BASE_URL is required for release builds.');
+    }
     return 'http://127.0.0.1:8000';
+  }
+
+  static Future<Map<String, String>> _headers() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('You must be signed in to use NeuroNudge planning.');
+    }
+
+    final token = await user.getIdToken();
+    if (token == null || token.isEmpty) {
+      throw StateError('Unable to authenticate this request.');
+    }
+
+    return {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+    };
   }
 
   static Future<void> submitProfile(Map<String, dynamic> payload) async {
     final uri = Uri.parse('$baseUrl/profile');
-    if (kDebugMode) {
-      final short = jsonEncode(payload);
-      print('[AI] POST $uri payload=${short.substring(0, short.length.clamp(0, 200))}…');
-    }
     try {
-      await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(payload),
-      );
-    } catch (e) {
-      if (kDebugMode) print('[AI] /profile error: $e');
+      final response = await http
+          .post(uri, headers: await _headers(), body: jsonEncode(payload))
+          .timeout(_timeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException(response.statusCode, response.body);
+      }
+    } on TimeoutException {
+      throw const HttpException(408, 'The NeuroNudge service timed out.');
     }
   }
 
@@ -42,29 +73,53 @@ class AIService {
     required Map<String, dynamic> profile,
   }) async {
     final uri = Uri.parse('$baseUrl/plan');
-    final bodyMap = {'title': title, 'description': description, 'profile': profile};
-    final body = jsonEncode(bodyMap);
+    final body = jsonEncode({
+      'title': title,
+      'description': description,
+      'profile': profile,
+    });
 
-    if (kDebugMode) {
-      print('[AI] POST $uri body=${body.substring(0, body.length.clamp(0, 200))}…');
+    late http.Response response;
+    try {
+      response = await http
+          .post(uri, headers: await _headers(), body: body)
+          .timeout(_timeout);
+    } on TimeoutException {
+      throw const HttpException(408, 'The NeuroNudge service timed out.');
     }
 
-    final resp = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: body,
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw HttpException(response.statusCode, response.body);
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Invalid response from NeuroNudge service.');
+    }
+
+    final rawSteps = decoded['steps'];
+    final steps = rawSteps is List
+        ? rawSteps.whereType<String>().where((step) => step.trim().isNotEmpty).toList()
+        : <String>[];
+
+    if (steps.isEmpty) {
+      throw const FormatException('The plan did not contain any steps.');
+    }
+
+    return Plan(
+      steps: steps,
+      timeboxMinutes: (decoded['timeboxMinutes'] as num?)?.toInt() ?? 25,
+      tone: decoded['tone'] as String? ?? 'Coach',
     );
-
-    if (kDebugMode) print('[AI] /plan status=${resp.statusCode} resp=${resp.body}');
-
-    if (resp.statusCode != 200) {
-      throw Exception('AI plan failed ${resp.statusCode}: ${resp.body}');
-    }
-
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
-    final steps = (data['steps'] as List?)?.cast<String>() ?? const <String>[];
-    final tb = (data['timeboxMinutes'] as num?)?.toInt() ?? 25;
-    final tone = (data['tone'] as String?) ?? 'Coach';
-    return Plan(steps: steps, timeboxMinutes: tb, tone: tone);
   }
+}
+
+class HttpException implements Exception {
+  final int statusCode;
+  final String message;
+
+  const HttpException(this.statusCode, this.message);
+
+  @override
+  String toString() => 'NeuroNudge request failed ($statusCode): $message';
 }
