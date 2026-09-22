@@ -6,6 +6,7 @@ from firebase_admin import auth as firebase_auth
 
 from backend.config import Settings, get_settings
 from backend.main import app
+from backend.planner import GeneratedPlan
 
 
 @pytest.fixture
@@ -53,6 +54,45 @@ def test_plan_accepts_verified_firebase_identity(_verify, client: TestClient):
     assert response.status_code == 200
     assert response.json()["timeboxMinutes"] == 10
     assert 1 <= len(response.json()["steps"]) <= 3
+    assert response.json()["source"] == "fallback"
+
+
+@patch("backend.main.generate_ai_plan")
+@patch("backend.auth._verify_token", return_value={"uid": "user-123"})
+def test_plan_returns_validated_ai_result(_verify, generate, client: TestClient):
+    generate.return_value = GeneratedPlan(
+        steps=["Open the report", "Write one heading", "Add three bullets"],
+        timeboxMinutes=15,
+        tone="Gentle",
+    )
+
+    response = client.post(
+        "/plan",
+        headers=auth_headers(),
+        json={"title": "Write quarterly report"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "steps": ["Open the report", "Write one heading", "Add three bullets"],
+        "timeboxMinutes": 15,
+        "tone": "Gentle",
+        "source": "ai",
+    }
+
+
+@patch("backend.main.generate_ai_plan", return_value=None)
+@patch("backend.auth._verify_token", return_value={"uid": "user-123"})
+def test_plan_falls_back_when_ai_is_unavailable(_verify, _generate, client: TestClient):
+    response = client.post(
+        "/plan",
+        headers=auth_headers(),
+        json={"title": "Clean the kitchen"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "fallback"
+    assert response.json()["steps"][0].startswith("Set a five-minute timer")
 
 
 @patch("backend.auth._verify_token", side_effect=firebase_auth.InvalidIdTokenError("invalid"))

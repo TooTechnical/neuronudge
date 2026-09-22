@@ -5,7 +5,7 @@ The app transforms overwhelming tasks into **small, achievable steps**, provides
 
 
 ##  Project Status
-- **Stage:** Mid-Development (MVP not yet deployed)  
+- **Stage:** Pre-release MVP (not yet deployed)
 - **Deployment:** Pending  
 - **Focus:** Building out core features and user onboarding  
 
@@ -30,6 +30,12 @@ the hosting platform or `GOOGLE_APPLICATION_CREDENTIALS`, and must set:
 - `FIREBASE_PROJECT_ID`
 - `ALLOWED_ORIGINS` to the exact web origins allowed to call the API
 - `ALLOWED_HOSTS` to the API's exact host names
+
+AI-generated plans are optional. Set both `OPENAI_API_KEY` and `OPENAI_MODEL`
+in the backend's secret environment to enable them. The API requests
+schema-validated output with provider storage disabled, applies a short timeout,
+and falls back to its built-in planner whenever AI is not configured or is
+unavailable. Never put the API key in Flutter or commit it to the repository.
 
 Authentication cannot be disabled when `APP_ENV=production`. API documentation
 is also disabled in production. Run the backend locally from the repository
@@ -75,15 +81,17 @@ NeuroNudge is being developed using:
 
 ### Currently Implemented
 - User authentication via Firebase (Email & Google Sign-In)  
-- Firestore integration for storing tasks  
-- Basic task creation and task listing  
+- Local task creation, task listing, and schedules
+- Personalized onboarding and activation preferences
+- AI task breakdown with a safe built-in fallback
+- Get Me Started micro-missions, Rescue Mode, and Body Double focus sessions
+- Realistic-day planning with capacity buffers
+- Local behavioral insights, streaks, and progress tracking
+- In-app account and local-data deletion controls
 
 ### In Development
-- Onboarding flow (collecting user stats, ADHD type, goals)  
-- Task breakdown into micro-steps  
 - Motivational nudges system (humor, drill sergeant, supportive tones)  
-- Reward mechanics (streaks, badges, sounds)  
-- Habit tracking module  
+- Release signing, hosted privacy/support pages, and store assets
 
 ### Planned
 - Text-to-Speech nudges  
@@ -94,8 +102,8 @@ NeuroNudge is being developed using:
   
 
 ##  Roadmap
-- [ ] Complete onboarding and personalization  
-- [ ] Implement dopamine feedback system  
+- [x] Complete onboarding and personalization
+- [x] Implement activation and feedback loops
 - [ ] Deploy MVP to app stores  
 - [ ] Expand into premium subscription features  
 

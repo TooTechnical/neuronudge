@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +9,8 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.auth import AuthenticatedUser, require_user
-from backend.config import get_settings
+from backend.config import Settings, get_settings
+from backend.planner import generate_ai_plan
 
 APP_VERSION = "0.2.0"
 MAX_TITLE_LENGTH = 160
@@ -63,6 +64,7 @@ class PlanResponse(BaseModel):
     steps: list[str]
     timeboxMinutes: int = Field(ge=5, le=90)
     tone: str
+    source: Literal["ai", "fallback"]
 
 
 class ProfileSubmission(BaseModel):
@@ -155,7 +157,19 @@ def choose_tone(profile: ProfileContext) -> str:
 def plan(
     request: PlanRequest,
     _user: AuthenticatedUser = Depends(require_user),
+    runtime_settings: Settings = Depends(get_settings),
 ) -> PlanResponse:
+    generated = generate_ai_plan(
+        title=request.title,
+        description=request.description,
+        preferred_nudge_style=request.profile.preferredNudgeStyle,
+        biggest_blocker=request.profile.biggestBlocker,
+        neuro_type=request.profile.neuroType,
+        settings=runtime_settings,
+    )
+    if generated is not None:
+        return PlanResponse(**generated.model_dump(), source="ai")
+
     steps: list[str] = []
     if request.description:
         raw = [
@@ -173,4 +187,4 @@ def plan(
     tone = choose_tone(request.profile)
     steps = steps[:3] if timebox <= 15 else steps[:5]
 
-    return PlanResponse(steps=steps, timeboxMinutes=timebox, tone=tone)
+    return PlanResponse(steps=steps, timeboxMinutes=timebox, tone=tone, source="fallback")

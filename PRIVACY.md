@@ -15,7 +15,11 @@ store launch.
 - When AI planning is requested, the selected task title, description, and the
   limited profile context required to personalize the plan are sent to the
   NeuroNudge API over HTTPS. The API authenticates the request using a Firebase
-  ID token and does not persist the submitted profile or task content.
+  ID token and does not persist the submitted profile or task content. When the
+  optional AI provider is enabled, that task context is sent to OpenAI to
+  generate the plan; NeuroNudge requests that the response not be stored by the
+  provider. If AI is unavailable, planning stays within the NeuroNudge API and
+  uses a built-in fallback.
 - Infrastructure providers may retain short-lived operational and security logs
   under their own policies.
 
