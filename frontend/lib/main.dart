@@ -19,7 +19,9 @@ import 'data/local_repo.dart';
 import 'services/ai_service.dart';
 import 'services/activation_engine.dart';
 import 'services/scheduler_service.dart';
+import 'services/behavior_insights.dart';
 import 'widgets/get_started_sheet.dart';
+import 'widgets/rescue_mode_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -678,6 +680,9 @@ class _TasksPageState extends State<TasksPage> {
     required String taskId,
     required int minutes,
     required List<String> steps,
+    String source = 'task',
+    String? barrier,
+    bool bodyDouble = false,
   }) {
     showModalBottomSheet(
       context: context,
@@ -688,6 +693,9 @@ class _TasksPageState extends State<TasksPage> {
         taskTitle: title,
         minutes: minutes,
         firstStep: steps.isNotEmpty ? steps.first : null,
+        source: source,
+        barrier: barrier,
+        bodyDouble: bodyDouble,
       ),
     );
   }
@@ -741,6 +749,9 @@ class _TasksPageState extends State<TasksPage> {
       taskId: plan.taskId,
       minutes: plan.minutes,
       steps: [plan.firstAction],
+      source: 'activation',
+      barrier: plan.barrier,
+      bodyDouble: true,
     );
   }
 
@@ -1293,22 +1304,232 @@ Future<void> _showNudgeNow(BuildContext context, LocalRepo repo) async {
 }
 
 /// ===== FOCUS (timer) =====
-class FocusPage extends StatelessWidget {
+class FocusPage extends StatefulWidget {
   final LocalRepo repo;
   const FocusPage({super.key, required this.repo});
+
+  @override
+  State<FocusPage> createState() => _FocusPageState();
+}
+
+class _FocusPageState extends State<FocusPage> {
+  List<Map<String, dynamic>> get _openTasks =>
+      widget.repo.allTasks().where((task) => task['completed'] != true).toList();
+
+  Future<void> _rescue() async {
+    final tasks = _openTasks;
+    if (tasks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add a task first so Rescue Mode has something to shrink.')),
+      );
+      return;
+    }
+    final plan = await showModalBottomSheet<ActivationPlan>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => RescueModeSheet(tasks: tasks, profile: widget.repo.getProfile()),
+    );
+    if (plan == null || !mounted) return;
+    final startedAt = DateTime.now().millisecondsSinceEpoch;
+    await widget.repo.logSession({
+      'event': 'activation_started',
+      'source': 'rescue',
+      'taskId': plan.taskId,
+      'taskTitle': plan.taskTitle,
+      'barrier': plan.barrier,
+      'mission': plan.firstAction,
+      'plannedMinutes': plan.minutes,
+      'createdAt': startedAt,
+    });
+    if (!mounted) return;
+    _showSprint(plan, source: 'rescue', bodyDouble: true);
+  }
+
+  Future<void> _bodyDouble() async {
+    final tasks = _openTasks;
+    if (tasks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add a task first, then start a body-double session.')),
+      );
+      return;
+    }
+    var taskId = tasks.first['id'] as String;
+    var minutes = 15;
+    final selected = await showDialog<(String, int)>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('AI body double'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Choose one task. NeuroNudge will stay present and keep your attention on the next visible action.'),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: taskId,
+                decoration: const InputDecoration(labelText: 'Task'),
+                items: tasks
+                    .map((task) => DropdownMenuItem(
+                          value: task['id'] as String,
+                          child: Text(task['title'] as String? ?? 'Untitled task'),
+                        ))
+                    .toList(),
+                onChanged: (value) => setDialogState(() => taskId = value ?? taskId),
+              ),
+              const SizedBox(height: 12),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 10, label: Text('10m')),
+                  ButtonSegment(value: 15, label: Text('15m')),
+                  ButtonSegment(value: 25, label: Text('25m')),
+                ],
+                selected: {minutes},
+                onSelectionChanged: (value) => setDialogState(() => minutes = value.first),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, (taskId, minutes)),
+              child: const Text('Start together'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null || !mounted) return;
+    final task = tasks.firstWhere((item) => item['id'] == selected.$1);
+    final steps = (task['steps'] as List?)?.cast<String>() ?? const <String>[];
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => FocusSprintSheet(
+        repo: widget.repo,
+        taskId: selected.$1,
+        taskTitle: task['title'] as String? ?? 'Task',
+        minutes: selected.$2,
+        firstStep: steps.isEmpty ? null : steps.first,
+        source: 'body_double',
+        bodyDouble: true,
+      ),
+    );
+  }
+
+  void _showSprint(
+    ActivationPlan plan, {
+    required String source,
+    required bool bodyDouble,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => FocusSprintSheet(
+        repo: widget.repo,
+        taskId: plan.taskId,
+        taskTitle: plan.taskTitle,
+        minutes: plan.minutes,
+        firstStep: plan.firstAction,
+        source: source,
+        barrier: plan.barrier,
+        bodyDouble: bodyDouble,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Focus')),
-      body: const Center(
-        child: Text(
-          "Start sprints from tasks for now.\n(Standalone Focus mode coming soon)",
-          textAlign: TextAlign.center,
-        ),
+      body: AnimatedBuilder(
+        animation: Listenable.merge([widget.repo.watchTasks(), widget.repo.watchSessions()]),
+        builder: (context, _) {
+          final insights = BehaviorInsights.fromSessions(widget.repo.allSessions());
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Text('Today', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(child: _metric('Starts', insights.startsToday.toString(), Icons.bolt)),
+                  const SizedBox(width: 8),
+                  Expanded(child: _metric('Finished', insights.completedToday.toString(), Icons.check_circle_outline)),
+                  const SizedBox(width: 8),
+                  Expanded(child: _metric('Focus', '${insights.focusMinutesToday}m', Icons.timer_outlined)),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Card.filled(
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text('Overwhelmed right now?', style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 6),
+                      const Text('Reset first. Then NeuroNudge will shrink one task into a two-minute rescue mission.'),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: _rescue,
+                        icon: const Icon(Icons.spa_outlined),
+                        label: const Text('Open Rescue Mode'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text('Need company while you work?', style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 6),
+                      const Text('Start a quiet body-double session with gentle check-ins and one visible next action.'),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        onPressed: _bodyDouble,
+                        icon: const Icon(Icons.people_outline),
+                        label: const Text('Start AI Body Double'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (insights.activationStarts > 0) ...[
+                const SizedBox(height: 20),
+                ListTile(
+                  leading: const Icon(Icons.insights),
+                  title: Text('${insights.activationSuccessPercent}% of activation starts became completed sprints'),
+                  subtitle: insights.mostHelpfulBarrier == null
+                      ? null
+                      : Text('Most completed barrier: ${insights.mostHelpfulBarrier}'),
+                ),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
+
+  Widget _metric(String label, String value, IconData icon) => Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          child: Column(
+            children: [
+              Icon(icon),
+              const SizedBox(height: 6),
+              Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              Text(label),
+            ],
+          ),
+        ),
+      );
 }
 
 class FocusSprintSheet extends StatefulWidget {
@@ -1317,6 +1538,9 @@ class FocusSprintSheet extends StatefulWidget {
   final String taskTitle;
   final int minutes;
   final String? firstStep;
+  final String source;
+  final String? barrier;
+  final bool bodyDouble;
 
   const FocusSprintSheet({
     super.key,
@@ -1325,6 +1549,9 @@ class FocusSprintSheet extends StatefulWidget {
     required this.taskTitle,
     required this.minutes,
     this.firstStep,
+    this.source = 'task',
+    this.barrier,
+    this.bodyDouble = false,
   });
 
   @override
@@ -1368,6 +1595,8 @@ class _FocusSprintSheetState extends State<FocusSprintSheet> {
       'startedAt': _startedMs,
       'durationMin': durationMin,
       'completed': true,
+      'source': widget.source,
+      if (widget.barrier != null) 'barrier': widget.barrier,
       'createdAt': DateTime.now().millisecondsSinceEpoch,
     });
 
@@ -1398,6 +1627,10 @@ class _FocusSprintSheetState extends State<FocusSprintSheet> {
           const SizedBox(height: 8),
           if (widget.firstStep != null && widget.firstStep!.isNotEmpty)
             Text('First step: ${widget.firstStep!}', textAlign: TextAlign.center),
+          if (widget.bodyDouble) ...[
+            const SizedBox(height: 10),
+            Text(_bodyDoublePrompt(), textAlign: TextAlign.center),
+          ],
           const SizedBox(height: 12),
           Text('$m:$s', style: const TextStyle(fontSize: 36, fontFeatures: [FontFeature.tabularFigures()])),
           const SizedBox(height: 12),
@@ -1421,6 +1654,14 @@ class _FocusSprintSheetState extends State<FocusSprintSheet> {
         ],
       ),
     );
+  }
+
+  String _bodyDoublePrompt() {
+    final elapsed = widget.minutes * 60 - _remainingSec;
+    final progress = elapsed / (widget.minutes * 60);
+    if (progress < .25) return "I'm here. Only stay with the first visible action.";
+    if (progress < .65) return 'Still with you. If you drifted, come back without judging it.';
+    return 'Keep it small. A useful stopping point counts as success.';
   }
 }
 

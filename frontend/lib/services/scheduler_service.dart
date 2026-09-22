@@ -23,14 +23,13 @@ class SchedulerService {
     final endMin = _minutesFromHHMM(workEndStr) ?? 17 * 60;
 
     // Days: default Mon–Fri
-    final List<dynamic> wdRaw = (profile['workDays'] as List?) ?? [1, 2, 3, 4, 5];
+    final List<dynamic> wdRaw =
+        (profile['workDays'] as List?) ?? [1, 2, 3, 4, 5];
     final workDays = wdRaw.map((e) => (e as num).toInt()).toSet();
 
-    final allow = (profile['allowWindows'] as Map?) ?? {
-      'before': true,
-      'during': true,
-      'after': true,
-    };
+    final allow =
+        (profile['allowWindows'] as Map?) ??
+        {'before': true, 'during': true, 'after': true};
 
     // Which window does this task prefer?
     final pref = (task['preferredWindow'] as String?)?.toLowerCase() ?? 'any';
@@ -43,7 +42,9 @@ class SchedulerService {
 
       // minutes from midnight for 'now' on 'date'
       final isToday = _sameDay(date, now);
-      final nowMin = isToday ? (now.hour * 60 + now.minute) : -1; // -1 => not today
+      final nowMin = isToday
+          ? (now.hour * 60 + now.minute)
+          : -1; // -1 => not today
 
       for (final w in windowsInPriority) {
         if (w == 'before' && (allow['before'] == true)) {
@@ -100,6 +101,11 @@ class SchedulerService {
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
-  static DateTime _atMinutes(DateTime day, int minutesFromMidnight) =>
-      DateTime(day.year, day.month, day.day, minutesFromMidnight ~/ 60, minutesFromMidnight % 60);
+  static DateTime _atMinutes(DateTime day, int minutesFromMidnight) => DateTime(
+    day.year,
+    day.month,
+    day.day,
+    minutesFromMidnight ~/ 60,
+    minutesFromMidnight % 60,
+  );
 }
