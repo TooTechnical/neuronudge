@@ -70,6 +70,15 @@ class LocalRepo {
 
   Future<void> logSession(Map<String, dynamic> s) async => _sessionsBox.add(s);
 
+  Future<void> deleteAllData() async {
+    await Future.wait([
+      _profileBox.clear(),
+      _tasksBox.clear(),
+      _sessionsBox.clear(),
+    ]);
+    await close();
+  }
+
   Future<void> close() async {
     await _profileBox.close();
     await _tasksBox.close();

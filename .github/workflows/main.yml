@@ -18,8 +18,8 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -35,7 +35,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -49,3 +49,5 @@ jobs:
         run: flutter analyze
       - name: Run Flutter tests
         run: flutter test
+      - name: Build Android debug artifact
+        run: flutter build apk --debug --dart-define=AI_BASE_URL=http://127.0.0.1:8000

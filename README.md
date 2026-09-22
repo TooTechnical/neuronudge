@@ -11,6 +11,11 @@ The app transforms overwhelming tasks into **small, achievable steps**, provides
 
 ## Development
 
+The current application version is a pre-release MVP. See
+[`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) before producing an
+Android release candidate and [`PRIVACY.md`](PRIVACY.md) for the pre-release
+privacy notice.
+
 ### Backend
 
 Use Python 3.12 and install `backend/requirements-dev.txt`. Copy
