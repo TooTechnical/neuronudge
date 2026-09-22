@@ -24,6 +24,9 @@ class Settings:
     check_revoked_tokens: bool
     allowed_origins: tuple[str, ...]
     allowed_hosts: tuple[str, ...]
+    openai_api_key: str | None = None
+    openai_model: str | None = None
+    openai_timeout_seconds: float = 8.0
 
     @property
     def is_production(self) -> bool:
@@ -42,6 +45,13 @@ class Settings:
 
 @lru_cache
 def get_settings() -> Settings:
+    try:
+        openai_timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "8"))
+    except ValueError as exc:
+        raise RuntimeError("OPENAI_TIMEOUT_SECONDS must be a number") from exc
+    if openai_timeout_seconds <= 0:
+        raise RuntimeError("OPENAI_TIMEOUT_SECONDS must be greater than zero")
+
     settings = Settings(
         environment=os.getenv("APP_ENV", "development").strip().lower(),
         require_auth=_flag("REQUIRE_AUTH", True),
@@ -49,6 +59,9 @@ def get_settings() -> Settings:
         check_revoked_tokens=_flag("CHECK_REVOKED_TOKENS", True),
         allowed_origins=_csv("ALLOWED_ORIGINS"),
         allowed_hosts=_csv("ALLOWED_HOSTS"),
+        openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+        openai_model=os.getenv("OPENAI_MODEL") or None,
+        openai_timeout_seconds=openai_timeout_seconds,
     )
     settings.validate()
     return settings
