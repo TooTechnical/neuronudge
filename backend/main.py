@@ -1,38 +1,41 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from backend.auth import AuthenticatedUser, require_user
+from backend.config import get_settings
 
 APP_VERSION = "0.2.0"
 MAX_TITLE_LENGTH = 160
 MAX_DESCRIPTION_LENGTH = 4000
 
 
-def _allowed_origins() -> list[str]:
-    raw = os.getenv("ALLOWED_ORIGINS", "")
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
-
-
+settings = get_settings()
 app = FastAPI(
     title="NeuroNudge API",
     version=APP_VERSION,
     description="Task-planning API for the NeuroNudge productivity application.",
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
 )
 
-origins = _allowed_origins()
-if origins:
+if settings.allowed_origins:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins,
+        allow_origins=list(settings.allowed_origins),
         allow_credentials=False,
         allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
+
+if settings.allowed_hosts:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
 
 class ProfileContext(BaseModel):
@@ -78,37 +81,13 @@ def health() -> dict[str, Any]:
     }
 
 
-def _require_bearer_token(authorization: str | None) -> str:
-    """Require an identity token at the API boundary.
-
-    Firebase Admin verification is deliberately the next implementation step.
-    Until that is wired, production must set REQUIRE_AUTH=false only for a
-    controlled preview environment.
-    """
-    require_auth = os.getenv("REQUIRE_AUTH", "true").lower() not in {"0", "false", "no"}
-    if not require_auth:
-        return "preview"
-
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token",
-        )
-    token = authorization.removeprefix("Bearer ").strip()
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token",
-        )
-    return token
-
-
 @app.post("/profile")
 def submit_profile(
     payload: ProfileSubmission,
-    authorization: str | None = Header(default=None),
+    user: AuthenticatedUser = Depends(require_user),
 ) -> dict[str, bool]:
-    _require_bearer_token(authorization)
+    if payload.uid != user.uid:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Profile user mismatch")
     # Do not log names, email addresses, diagnoses, biographies, or raw tokens.
     # Profile persistence will be added behind verified Firebase identity.
     return {"ok": True}
@@ -175,10 +154,8 @@ def choose_tone(profile: ProfileContext) -> str:
 @app.post("/plan", response_model=PlanResponse)
 def plan(
     request: PlanRequest,
-    authorization: str | None = Header(default=None),
+    _user: AuthenticatedUser = Depends(require_user),
 ) -> PlanResponse:
-    _require_bearer_token(authorization)
-
     steps: list[str] = []
     if request.description:
         raw = [

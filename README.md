@@ -9,6 +9,51 @@ The app transforms overwhelming tasks into **small, achievable steps**, provides
 - **Deployment:** Pending  
 - **Focus:** Building out core features and user onboarding  
 
+## Development
+
+### Backend
+
+Use Python 3.12 and install `backend/requirements-dev.txt`. Copy
+`backend/.env.example` to `backend/.env` for local values; `.env` files and
+service-account credentials must never be committed.
+
+The API verifies every protected request with Firebase Admin. Firebase Admin
+uses Application Default Credentials. Production must provide credentials via
+the hosting platform or `GOOGLE_APPLICATION_CREDENTIALS`, and must set:
+
+- `APP_ENV=production`
+- `FIREBASE_PROJECT_ID`
+- `ALLOWED_ORIGINS` to the exact web origins allowed to call the API
+- `ALLOWED_HOSTS` to the API's exact host names
+
+Authentication cannot be disabled when `APP_ENV=production`. API documentation
+is also disabled in production. Run the backend locally from the repository
+root with `uvicorn backend.main:app --reload`.
+
+### Flutter
+
+Release builds require the API URL at build time and reject non-HTTPS values:
+
+```sh
+flutter build appbundle --dart-define=AI_BASE_URL=https://api.example.com
+```
+
+Firebase client configuration files contain client identifiers, not Admin SDK
+credentials. Keep separate Firebase projects/configurations for development and
+production. Never put a service-account JSON file in the Flutter application.
+
+### Checks
+
+Pull requests run backend tests, Flutter formatting checks, static analysis,
+and Flutter tests. Equivalent local checks are:
+
+```sh
+python -m pytest -q backend/tests
+cd frontend
+flutter analyze
+flutter test
+```
+
 
 
 ##  Tech Stack & Programming Languages
@@ -74,4 +119,3 @@ While the app is still in **mid-development**, it demonstrates my ability to:
 - Apply software engineering practices to deliver scalable, real-world solutions  
 
 NeuroNudge is more than a coding exercise — it reflects my ability to take an idea from concept to execution, combining **technical skills, creativity, and problem-solving**. I am excited to continue growing as a developer and bring these skills into a professional role.  
-
