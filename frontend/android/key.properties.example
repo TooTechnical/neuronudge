@@ -1,0 +1,5 @@
+# Copy to key.properties and fill locally. Never commit key.properties or the keystore.
+storePassword=replace-me
+keyPassword=replace-me
+keyAlias=upload
+storeFile=/absolute/path/to/neuronudge-upload.jks

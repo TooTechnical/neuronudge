@@ -1949,6 +1949,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool allowDuring = true;
   bool allowAfter = true;
   final dailyTargetCtrl = TextEditingController(text: '3');
+  int dailyCapacityMinutes = 60;
   bool allowSounds = true;
 
   final dayLabels = const {1:'Mon',2:'Tue',3:'Wed',4:'Thu',5:'Fri',6:'Sat',7:'Sun'};
@@ -1975,6 +1976,7 @@ class _SettingsPageState extends State<SettingsPage> {
       allowDuring = allow['during'] == true;
       allowAfter = allow['after'] == true;
       dailyTargetCtrl.text = ((d['dailyTaskTarget'] ?? 3)).toString();
+      dailyCapacityMinutes = (d['dailyCapacityMinutes'] as num?)?.toInt() ?? 60;
       allowSounds = d['allowSounds'] == true;
       _loading = false;
     });
@@ -2000,6 +2002,71 @@ class _SettingsPageState extends State<SettingsPage> {
   void dispose() {
     dailyTargetCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _deleteAccountAndData() async {
+    var confirmed = false;
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Delete account and data?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'This permanently deletes your Firebase sign-in account and clears this device’s NeuroNudge profile, tasks, and focus history.',
+              ),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: confirmed,
+                title: const Text('I understand this cannot be undone'),
+                onChanged: (value) => setDialogState(() => confirmed = value == true),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: confirmed ? () => Navigator.pop(dialogContext, true) : null,
+              child: const Text('Delete permanently'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (shouldDelete != true) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      await user.delete();
+      await widget.repo.deleteAllData();
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) return;
+      final message = error.code == 'requires-recent-login'
+          ? 'Please sign out, sign in again, and retry account deletion.'
+          : 'Account deletion failed. Your local data was not erased.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  void _showPrivacySummary() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Privacy at a glance'),
+        content: const SingleChildScrollView(
+          child: Text(
+            'Your profile, tasks, and focus history are stored on this device. When you request AI planning, the task and limited personalization context are sent to the authenticated NeuroNudge API. NeuroNudge does not sell personal data or include advertising SDKs. The full pre-release notice is in PRIVACY.md.',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+        ],
+      ),
+    );
   }
 
   @override
@@ -2058,6 +2125,18 @@ class _SettingsPageState extends State<SettingsPage> {
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(labelText: 'Daily task target'),
           ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<int>(
+            value: dailyCapacityMinutes,
+            decoration: const InputDecoration(labelText: 'Daily focus capacity'),
+            items: const [
+              DropdownMenuItem(value: 30, child: Text('30 minutes')),
+              DropdownMenuItem(value: 60, child: Text('1 hour')),
+              DropdownMenuItem(value: 90, child: Text('1.5 hours')),
+              DropdownMenuItem(value: 120, child: Text('2 hours')),
+            ],
+            onChanged: (value) => setState(() => dailyCapacityMinutes = value ?? 60),
+          ),
           SwitchListTile(
             title: const Text('Play sounds on complete'),
             value: allowSounds,
@@ -2079,6 +2158,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   'after': allowAfter,
                 },
                 'dailyTaskTarget': int.tryParse(dailyTargetCtrl.text.trim()) ?? 3,
+                'dailyCapacityMinutes': dailyCapacityMinutes,
                 'allowSounds': allowSounds,
                 'updatedAt': DateTime.now().millisecondsSinceEpoch,
               });
@@ -2087,6 +2167,22 @@ class _SettingsPageState extends State<SettingsPage> {
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Settings saved')));
               }
             },
+          ),
+          const Divider(height: 32),
+          const Text('Privacy & data', style: TextStyle(fontWeight: FontWeight.w600)),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.privacy_tip_outlined),
+            title: const Text('Privacy at a glance'),
+            subtitle: const Text('See what stays on device and what is sent for planning.'),
+            onTap: _showPrivacySummary,
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.delete_forever_outlined, color: Colors.red),
+            title: const Text('Delete account and all data'),
+            subtitle: const Text('Permanently remove your account and local NeuroNudge data.'),
+            onTap: _deleteAccountAndData,
           ),
         ],
       ),
