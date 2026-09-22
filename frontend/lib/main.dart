@@ -20,7 +20,9 @@ import 'services/ai_service.dart';
 import 'services/activation_engine.dart';
 import 'services/scheduler_service.dart';
 import 'services/behavior_insights.dart';
+import 'services/day_plan_engine.dart';
 import 'widgets/get_started_sheet.dart';
+import 'widgets/day_plan_sheet.dart';
 import 'widgets/rescue_mode_sheet.dart';
 
 void main() async {
@@ -159,6 +161,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   TimeOfDay? workStart = const TimeOfDay(hour: 9, minute: 0);
   TimeOfDay? workEnd = const TimeOfDay(hour: 17, minute: 0);
   final dailyTargetCtrl = TextEditingController(text: '3');
+  int dailyCapacityMinutes = 60;
 
   // Workdays selection
   final days = <int>{1, 2, 3, 4, 5}; // Mon–Fri
@@ -229,6 +232,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         'before': allowBefore, 'during': allowDuring, 'after': allowAfter,
       },
       'dailyTaskTarget': int.tryParse(dailyTargetCtrl.text.trim()) ?? 3,
+      'dailyCapacityMinutes': dailyCapacityMinutes,
       'goals': goalCtrl.text.trim(),
       'biggestBlocker': blocker,
       'preferredNudgeStyle': nudgeStyle,
@@ -421,6 +425,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               if (n == null || n < 1) return 'Enter 1 or more';
               return null;
             },
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<int>(
+            value: dailyCapacityMinutes,
+            decoration: const InputDecoration(
+              labelText: 'Realistic daily focus capacity',
+              helperText: 'Choose focused time, not your full available day.',
+            ),
+            items: const [
+              DropdownMenuItem(value: 30, child: Text('30 minutes')),
+              DropdownMenuItem(value: 60, child: Text('1 hour')),
+              DropdownMenuItem(value: 90, child: Text('1.5 hours')),
+              DropdownMenuItem(value: 120, child: Text('2 hours')),
+            ],
+            onChanged: (value) => setState(() => dailyCapacityMinutes = value ?? 60),
           ),
         ],
       ),
@@ -755,6 +774,53 @@ class _TasksPageState extends State<TasksPage> {
     );
   }
 
+  Future<void> _openDayPlan() async {
+    final tasks = widget.repo.allTasks();
+    if (tasks.where((task) => task['completed'] != true).isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add an unfinished task before planning your day.')),
+      );
+      return;
+    }
+    final plan = await showModalBottomSheet<DayPlan>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => DayPlanSheet(tasks: tasks, profile: widget.repo.getProfile()),
+    );
+    if (plan == null || !mounted) return;
+
+    final now = DateTime.now();
+    final dateKey = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    for (final task in tasks) {
+      if (task['plannedFor'] == dateKey) {
+        await widget.repo.updateTask(task['id'] as String, {
+          'plannedFor': null,
+          'plannedOrder': null,
+        });
+      }
+    }
+    for (var index = 0; index < plan.tasks.length; index++) {
+      await widget.repo.updateTask(plan.tasks[index].id, {
+        'plannedFor': dateKey,
+        'plannedOrder': index,
+      });
+    }
+    final profile = widget.repo.getProfile();
+    await widget.repo.saveProfile({...profile, 'dailyCapacityMinutes': plan.capacityMinutes});
+    await widget.repo.logSession({
+      'event': 'day_plan_created',
+      'taskCount': plan.tasks.length,
+      'plannedMinutes': plan.plannedMinutes,
+      'bufferMinutes': plan.bufferMinutes,
+      'createdAt': now.millisecondsSinceEpoch,
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${plan.tasks.length} tasks planned with ${plan.bufferMinutes} minutes kept free.')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = widget.repo;
@@ -810,6 +876,16 @@ class _TasksPageState extends State<TasksPage> {
               ),
             ),
           ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.today_outlined),
+              title: const Text('Plan a realistic day'),
+              subtitle: const Text('Fit important work to your actual capacity and protect breathing room.'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _openDayPlan,
+            ),
+          ),
           const SizedBox(height: 16),
 
           Row(
@@ -848,6 +924,9 @@ class _TasksPageState extends State<TasksPage> {
                   final cat = (d['category'] ?? 'Both') as String;
                   final win = (d['preferredWindow'] ?? 'any') as String;
                   final int? nextMs = d['nextNudgeAt'] as int?;
+                  final now = DateTime.now();
+                  final todayKey = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+                  final plannedToday = d['plannedFor'] == todayKey;
                   final nextStr = (nextMs == null)
                       ? '—'
                       : TimeOfDay.fromDateTime(DateTime.fromMillisecondsSinceEpoch(nextMs)).format(context);
@@ -871,6 +950,7 @@ class _TasksPageState extends State<TasksPage> {
                                   _chip(Icons.category, cat),
                                   _chip(Icons.access_time, 'Window: ${win[0].toUpperCase()}${win.substring(1)}'),
                                   _chip(Icons.schedule, 'Next: $nextStr'),
+                                  if (plannedToday) _chip(Icons.today, 'Today'),
                                 ],
                               ),
                             ],
