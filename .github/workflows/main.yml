@@ -2,21 +2,50 @@ name: CI
 
 on:
   push:
-    branches: ["main"]
+    branches: [main]
   pull_request:
-    branches: ["main"]
+    branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  sanity:
+  backend:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements-dev.txt
+      - name: Run backend tests
+        run: python -m pytest -q backend/tests
 
-      - name: Print context
-        run: |
-          echo "Ref: $GITHUB_REF"
-          echo "SHA: $GITHUB_SHA"
+  flutter:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.32.5"
+          cache: true
+      - name: Install Flutter dependencies
+        run: flutter pub get
+      - name: Verify changed service and test formatting
+        run: dart format --output=none --set-exit-if-changed lib/services/ai_service.dart test
+      - name: Analyze Flutter
+        run: flutter analyze
+      - name: Run Flutter tests
+        run: flutter test

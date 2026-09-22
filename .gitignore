@@ -5,12 +5,26 @@
 .idea/
 .vscode/
 
-# Python venv
-venv/
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.venv/
+**/.ci-venv/
 **/venv/
+**/.env
+!**/.env.example
 
 # Flutter / Dart
 **/build/
 .dart_tool/
+.firebase/
+.flutter-plugins
+.flutter-plugins-dependencies
 .packages
 flutter_export_environment.sh
+
+# Logs and local configuration
+*.log
+**/local.properties
+**/Generated.xcconfig

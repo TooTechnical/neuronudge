@@ -1,6 +1,4 @@
 // lib/services/scheduler_service.dart
-import 'package:flutter/material.dart';
-
 class SchedulerService {
   /// profile: {
   ///   'workStart': 'HH:MM',
@@ -39,7 +37,6 @@ class SchedulerService {
     final windowsInPriority = _windowPriority(pref, allow);
 
     // Try up to 14 days ahead to find the next valid nudge slot
-    DateTime candidate = now;
     for (int i = 0; i < 14; i++) {
       final date = now.add(Duration(days: i));
       if (!workDays.contains(date.weekday)) continue;
