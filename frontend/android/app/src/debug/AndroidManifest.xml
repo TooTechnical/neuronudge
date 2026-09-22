@@ -4,4 +4,7 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Local Firebase and API emulators use loopback HTTP. Release builds do
+         not merge this manifest and remain HTTPS-only. -->
+    <application android:usesCleartextTraffic="true"/>
 </manifest>

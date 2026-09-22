@@ -112,6 +112,28 @@ def test_profile_cannot_write_another_users_profile(_verify, client: TestClient)
     assert response.status_code == 403
 
 
+def test_local_preview_accepts_emulator_profile_uid():
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        environment="development",
+        require_auth=False,
+        firebase_project_id="demo-neuronudge",
+        check_revoked_tokens=False,
+        allowed_origins=(),
+        allowed_hosts=(),
+    )
+    try:
+        with TestClient(app) as preview_client:
+            response = preview_client.post(
+                "/profile",
+                json={"uid": "firebase-emulator-user"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
 def test_production_settings_reject_disabled_authentication():
     settings = Settings(
         environment="production",
