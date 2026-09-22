@@ -99,7 +99,10 @@ class AIService {
 
     final rawSteps = decoded['steps'];
     final steps = rawSteps is List
-        ? rawSteps.whereType<String>().where((step) => step.trim().isNotEmpty).toList()
+        ? rawSteps
+              .whereType<String>()
+              .where((step) => step.trim().isNotEmpty)
+              .toList()
         : <String>[];
 
     if (steps.isEmpty) {

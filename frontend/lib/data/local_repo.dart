@@ -22,7 +22,7 @@ class LocalRepo {
   // ---------- Profile ----------
   Map<String, dynamic> getProfile() {
     final raw = _profileBox.get('data');
-    if (raw is Map) return Map<String, dynamic>.from(raw as Map);
+    if (raw is Map) return Map<String, dynamic>.from(raw);
     return <String, dynamic>{};
   }
 
@@ -38,7 +38,7 @@ class LocalRepo {
   List<Map<String, dynamic>> allTasks() {
     return _tasksBox.values
         .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e as Map))
+        .map((e) => Map<String, dynamic>.from(e))
         .toList();
   }
 
@@ -51,7 +51,7 @@ class LocalRepo {
   Future<void> updateTask(String id, Map<String, dynamic> patch) async {
     final existing = _tasksBox.get(id);
     final base = (existing is Map)
-        ? Map<String, dynamic>.from(existing as Map)
+        ? Map<String, dynamic>.from(existing)
         : <String, dynamic>{'id': id};
     await _tasksBox.put(id, {...base, ...patch});
   }

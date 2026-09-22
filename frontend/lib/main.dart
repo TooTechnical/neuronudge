@@ -1,7 +1,6 @@
 // frontend/lib/main.dart
 import 'dart:async';
 import 'dart:math';
-import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 
@@ -830,9 +829,9 @@ class _TasksPageState extends State<TasksPage> {
   Widget _chip(IconData icon, String text) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     decoration: BoxDecoration(
-      color: Colors.deepPurple.withOpacity(.08),
+      color: Colors.deepPurple.withValues(alpha: .08),
       borderRadius: BorderRadius.circular(24),
-      border: Border.all(color: Colors.deepPurple.withOpacity(.2)),
+      border: Border.all(color: Colors.deepPurple.withValues(alpha: .2)),
     ),
     child: Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(icon, size: 16, color: Colors.deepPurple),
@@ -918,9 +917,9 @@ class _StreakRow extends StatelessWidget {
   Widget _pill(IconData icon, String label, String value) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
     decoration: BoxDecoration(
-      color: Colors.deepPurple.withOpacity(.08),
+      color: Colors.deepPurple.withValues(alpha: .08),
       borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: Colors.deepPurple.withOpacity(.2)),
+      border: Border.all(color: Colors.deepPurple.withValues(alpha: .2)),
     ),
     child: Row(
       children: [
@@ -1061,7 +1060,7 @@ Future<void> _showAddOrEditTaskDialog(
         if (isEdit)
           TextButton(
             onPressed: () async {
-              await repo.deleteTask(taskId!);
+              await repo.deleteTask(taskId);
               if (context.mounted) {
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Task deleted')));
@@ -1077,13 +1076,13 @@ Future<void> _showAddOrEditTaskDialog(
             final tbParsed = int.tryParse(timeboxCtrl.text.trim());
             int timeboxMinutes = (tbParsed == null || tbParsed < 5 || tbParsed > 60) ? 25 : tbParsed;
             List<String> steps = isEdit
-                ? ((existing?['steps'] as List?)?.cast<String>() ?? const <String>[])
+                ? ((existing['steps'] as List?)?.cast<String>() ?? const <String>[])
                 : const <String>[];
-            String tone = isEdit ? (existing?['aiTone'] as String? ?? 'Coach') : 'Coach';
+            String tone = isEdit ? (existing['aiTone'] as String? ?? 'Coach') : 'Coach';
 
             try {
               if (isEdit) {
-                await repo.updateTask(taskId!, {
+                await repo.updateTask(taskId, {
                   'title': title,
                   'description': description,
                   'category': category,
