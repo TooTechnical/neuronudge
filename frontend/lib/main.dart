@@ -17,7 +17,9 @@ import 'data/local_repo.dart';
 
 // AI + scheduling
 import 'services/ai_service.dart';
+import 'services/activation_engine.dart';
 import 'services/scheduler_service.dart';
+import 'widgets/get_started_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -138,7 +140,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final customPronounsCtrl = TextEditingController();
   final ageCtrl = TextEditingController();
 
-  String neuroType = 'ADHD - Combined';
+  String neuroType = 'None / Prefer not to say';
   final bioCtrl = TextEditingController();
 
   final strengths = <String>{};
@@ -169,6 +171,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final goalCtrl = TextEditingController();
   String blocker = 'Starting feels hard';
   String nudgeStyle = 'Coach';
+  int activationMinutes = 3;
   String role = 'Employee';
   bool allowSounds = true;
 
@@ -227,6 +230,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       'goals': goalCtrl.text.trim(),
       'biggestBlocker': blocker,
       'preferredNudgeStyle': nudgeStyle,
+      'activationMinutes': activationMinutes,
       'allowSounds': allowSounds,
       'currentStreak': 0,
       'longestStreak': 0,
@@ -306,14 +310,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       ),
     ),
     Step(
-      title: const Text('Mind & style'),
+      title: const Text('How you work'),
       isActive: _step >= 1,
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           DropdownButtonFormField<String>(
             value: neuroType,
-            decoration: const InputDecoration(labelText: 'ADHD / Intellectual disability'),
+            decoration: const InputDecoration(labelText: 'Attention style (optional)'),
             items: const [
               DropdownMenuItem(value: 'ADHD - Inattentive', child: Text('ADHD - Inattentive')),
               DropdownMenuItem(value: 'ADHD - Hyperactive', child: Text('ADHD - Hyperactive')),
@@ -321,7 +325,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               DropdownMenuItem(value: 'Intellectual Disability', child: Text('Intellectual Disability')),
               DropdownMenuItem(value: 'None / Prefer not to say', child: Text('None / Prefer not to say')),
             ],
-            onChanged: (v) => setState(() => neuroType = v ?? 'ADHD - Combined'),
+            onChanged: (v) => setState(() => neuroType = v ?? 'None / Prefer not to say'),
           ),
           const SizedBox(height: 12),
           TextFormField(
@@ -420,7 +424,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       ),
     ),
     Step(
-      title: const Text('Goals & nudges'),
+      title: const Text('Starting support'),
       isActive: _step >= 3,
       content: Column(
         children: [
@@ -452,6 +456,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               DropdownMenuItem(value: 'Comedian', child: Text('Comedian')),
             ],
             onChanged: (v) => setState(() => nudgeStyle = v ?? 'Coach'),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<int>(
+            value: activationMinutes,
+            decoration: const InputDecoration(
+              labelText: 'Best tiny-start length',
+              helperText: 'How small should the first mission feel?',
+            ),
+            items: const [
+              DropdownMenuItem(value: 2, child: Text('2 minutes — make it effortless')),
+              DropdownMenuItem(value: 3, child: Text('3 minutes — a tiny start')),
+              DropdownMenuItem(value: 5, child: Text('5 minutes — build momentum')),
+              DropdownMenuItem(value: 10, child: Text('10 minutes — give me a push')),
+            ],
+            onChanged: (value) => setState(() => activationMinutes = value ?? 3),
           ),
           SwitchListTile(
             title: const Text('Play sounds on complete'),
@@ -673,6 +692,58 @@ class _TasksPageState extends State<TasksPage> {
     );
   }
 
+  Future<void> _openGetStarted({String? initialTaskId}) async {
+    final tasks = widget.repo
+        .allTasks()
+        .where((task) => task['completed'] != true)
+        .toList();
+    if (tasks.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add a task first, then NeuroNudge can help you begin.')),
+      );
+      return;
+    }
+
+    final plan = await showModalBottomSheet<ActivationPlan>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => GetStartedSheet(
+        tasks: tasks,
+        profile: widget.repo.getProfile(),
+        initialTaskId: initialTaskId,
+      ),
+    );
+    if (plan == null || !mounted) return;
+
+    final task = tasks.firstWhere((item) => item['id'] == plan.taskId);
+    final attempts = (task['activationAttempts'] as num?)?.toInt() ?? 0;
+    final startedAt = DateTime.now().millisecondsSinceEpoch;
+    await widget.repo.updateTask(plan.taskId, {
+      'activationAttempts': attempts + 1,
+      'lastActivationAt': startedAt,
+      'lastActivationBarrier': plan.barrier,
+    });
+    await widget.repo.logSession({
+      'event': 'activation_started',
+      'taskId': plan.taskId,
+      'taskTitle': plan.taskTitle,
+      'barrier': plan.barrier,
+      'mission': plan.firstAction,
+      'plannedMinutes': plan.minutes,
+      'createdAt': startedAt,
+    });
+
+    if (!mounted) return;
+    _openSprint(
+      title: plan.taskTitle,
+      taskId: plan.taskId,
+      minutes: plan.minutes,
+      steps: [plan.firstAction],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = widget.repo;
@@ -701,6 +772,33 @@ class _TasksPageState extends State<TasksPage> {
           _GreetingCard(repo: repo),
           const SizedBox(height: 12),
           _StreakRow(repo: repo),
+          const SizedBox(height: 16),
+
+          Card.filled(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Stuck before you start?', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+                        SizedBox(height: 4),
+                        Text('Get one tiny mission based on what is blocking you right now.'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                    onPressed: _openGetStarted,
+                    icon: const Icon(Icons.bolt),
+                    label: const Text('Get me started'),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 16),
 
           Row(
