@@ -53,6 +53,23 @@ Firebase client configuration files contain client identifiers, not Admin SDK
 credentials. Keep separate Firebase projects/configurations for development and
 production. Never put a service-account JSON file in the Flutter application.
 
+For an Android emulator smoke test without using a real account, start the
+local Auth emulator from `frontend` with:
+
+```sh
+firebase emulators:start --only auth --project demo-neuronudge
+```
+
+Run the backend locally with `REQUIRE_AUTH=false`, then start Flutter with:
+
+```sh
+flutter run -d emulator-5554 \
+  --dart-define=USE_FIREBASE_AUTH_EMULATOR=true \
+  --dart-define=AI_BASE_URL=http://10.0.2.2:8000
+```
+
+The Auth emulator switch is rejected in release builds.
+
 ### Checks
 
 Pull requests run backend tests, Flutter formatting checks, static analysis,

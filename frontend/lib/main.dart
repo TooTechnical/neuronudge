@@ -2,13 +2,14 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 // Firebase Auth (Google sign-in)
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_ui_auth/firebase_ui_auth.dart';
+import 'package:firebase_ui_auth/firebase_ui_auth.dart' as firebase_ui;
 import 'package:firebase_ui_oauth_google/firebase_ui_oauth_google.dart';
 
 // Local storage
@@ -28,6 +29,17 @@ import 'widgets/rescue_mode_sheet.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  const useAuthEmulator = bool.fromEnvironment('USE_FIREBASE_AUTH_EMULATOR');
+  if (useAuthEmulator) {
+    if (kReleaseMode) {
+      throw StateError('The Firebase Auth emulator cannot be used in release builds.');
+    }
+    const authEmulatorHost = String.fromEnvironment(
+      'FIREBASE_AUTH_EMULATOR_HOST',
+      defaultValue: '10.0.2.2',
+    );
+    await FirebaseAuth.instance.useAuthEmulator(authEmulatorHost, 9099);
+  }
   await Hive.initFlutter(); // local boxes will be opened per-user after login
   runApp(const NeuroNudgeApp());
 }
@@ -60,8 +72,9 @@ class AuthGate extends StatelessWidget {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
         if (!snap.hasData) {
-          return SignInScreen(
+          return firebase_ui.SignInScreen(
             providers: [
+              firebase_ui.EmailAuthProvider(),
               GoogleProvider(
                 clientId: '759312443189-dh2ps8prek5h0al56sd2b9nn2rqod00g.apps.googleusercontent.com',
               ),
@@ -249,8 +262,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     setState(() => _saving = true);
     try {
       await widget.repo.saveProfile(profile);
-      // notify planner (non-blocking)
-      AIService.submitProfile(profile);
+      // The local profile is authoritative. Remote planner sync should never
+      // prevent onboarding from completing when the API is unavailable.
+      unawaited(AIService.submitProfile(profile).catchError((Object _) {}));
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
