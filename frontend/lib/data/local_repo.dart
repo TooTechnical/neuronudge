@@ -59,6 +59,15 @@ class LocalRepo {
   Future<void> deleteTask(String id) async => _tasksBox.delete(id);
 
   // ---------- Sessions ----------
+  ValueListenable<Box> watchSessions() => _sessionsBox.listenable();
+
+  List<Map<String, dynamic>> allSessions() {
+    return _sessionsBox.values
+        .whereType<Map>()
+        .map((entry) => Map<String, dynamic>.from(entry))
+        .toList();
+  }
+
   Future<void> logSession(Map<String, dynamic> s) async => _sessionsBox.add(s);
 
   Future<void> close() async {

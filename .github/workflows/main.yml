@@ -43,8 +43,8 @@ jobs:
           cache: true
       - name: Install Flutter dependencies
         run: flutter pub get
-      - name: Verify changed service, widget, and test formatting
-        run: dart format --output=none --set-exit-if-changed lib/services/ai_service.dart lib/services/activation_engine.dart lib/widgets/get_started_sheet.dart test
+      - name: Verify service, widget, and test formatting
+        run: dart format --output=none --set-exit-if-changed lib/services lib/widgets test
       - name: Analyze Flutter
         run: flutter analyze
       - name: Run Flutter tests
